@@ -1,0 +1,252 @@
+{% extends "ring/base.html" %}
+{% load ring_filters %}
+{% block title %}{{ machine.hostname }} — NLNOG RING{% endblock %}
+
+{% block content %}
+<h1>{{ machine.hostname }}</h1>
+<p class="muted">Last active: {{ machine.last_active|date:"Y-m-d H:i"|default:"—" }}{% if not machine.active and machine.last_active %} ({{ machine.last_active|days_ago }}){% endif %}</p>
+
+<p>
+  {% if machine.active %}<span class="badge ok">active</span>{% else %}<span class="badge bad">inactive</span>{% endif %}
+  {% if machine.v4 %}{% if machine.alive_v4 %}<span class="badge ok">v4 up</span>{% else %}<span class="badge bad">v4 down</span>{% endif %}{% endif %}
+  {% if machine.alive_v6 %}<span class="badge ok">v6 up</span>{% else %}<span class="badge bad">v6 down</span>{% endif %}
+  {% if latest_health.needs_reboot %}
+    <a class="btn btn-danger" href="ssh://{{ machine.hostname }}" title="This node needs a reboot">reboot required</a>
+  {% endif %}
+  {% if latest_health.ubuntu_updates %}
+    <span class="badge bad">{{ latest_health.ubuntu_updates }} update{{ latest_health.ubuntu_updates|pluralize }}</span>
+  {% endif %}
+  {% if latest_health.ubuntu_security_updates %}
+    <span class="badge bad">{{ latest_health.ubuntu_security_updates }} security update{{ latest_health.ubuntu_security_updates|pluralize }}</span>
+  {% endif %}
+  <a class="btn btn-outline" href="ssh://{{ machine.hostname }}" title="Connect via SSH">ssh</a>
+  <a class="btn btn-outline live-status" href="#" data-url="{% url 'ring-machine-status' machine.hostname %}" data-host="{{ machine.hostname }}">live status</a>
+</p>
+
+<div class="kpis">
+  <div class="kpi"><div class="num ip muted">{{ machine.v4|default:"—" }}</div><div class="lbl">IPv4</div></div>
+  <div class="kpi"><div class="num ip muted">{{ machine.v6|default:"—" }}</div><div class="lbl">IPv6</div></div>
+  <div class="kpi"><div class="num"><a href="https://www.peeringdb.com/asn/{{ machine.autnum }}" target="_blank" rel="noopener">{{ machine.autnum }}</a></div><div class="lbl">ASN</div></div>
+  <div class="kpi"><div class="num">{{ flag }} {{ machine.country|default:"—" }}{% if machine.state %}-{{ machine.state }}{% endif %}</div><div class="lbl">Location</div></div>
+</div>
+
+<div class="grid">
+  <div>
+    <h2>Owner</h2>
+    <table>
+      <tr><th>User</th><td><a href="{% url 'ring-participants' %}">{{ machine.owner.username }}</a></td></tr>
+      <tr><th>Participant</th><td>{{ machine.owner.participant.company }}</td></tr>
+      <tr><th>Datacenter</th><td>{{ machine.dc|default:"—" }}</td></tr>
+      <tr><th>City</th><td>{{ machine.city|default:"—" }}</td></tr>
+      <tr><th>Geo</th><td class="muted">{{ machine.geo|default:"—" }}</td></tr>
+      <tr><th>Registered</th><td class="muted">{{ machine.tstamp|date:"Y-m-d"|default:"—" }}</td></tr>
+    </table>
+
+    {% if remarks %}
+    <h2>Remarks</h2>
+    <table>
+      <tbody>
+      {% for r in remarks %}
+        <tr><td class="muted">{{ r.tstamp|date:"Y-m-d H:i" }}</td><td>{{ r.remark }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+  </div>
+  <div>
+    {% if map_data %}
+    <h2>Location</h2>
+    <div class="map">
+      <iframe
+        title="Map of {{ machine.hostname }}"
+        src="https://www.openstreetmap.org/export/embed.html?bbox={{ map_data.bbox }}&amp;layer=mapnik&amp;marker={{ map_data.lat }},{{ map_data.lon }}"
+        loading="lazy"
+        referrerpolicy="no-referrer-when-downgrade"></iframe>
+      <p class="muted"><a href="https://www.openstreetmap.org/?mlat={{ map_data.lat }}&amp;mlon={{ map_data.lon }}#map=14/{{ map_data.lat }}/{{ map_data.lon }}" target="_blank" rel="noopener">Open in OpenStreetMap</a></p>
+    </div>
+    {% else %}
+    <p class="muted">No location recorded.</p>
+    {% endif %}
+  </div>
+</div>
+
+<div>
+  <h2>Last health reports</h2>
+  <p class="table-filter">
+    <a href="?{% if runs_qs %}{{ runs_qs }}{% endif %}"{% if health_filter != "failed" %} class="on"{% endif %}>all</a>
+    <a href="?{% if runs_qs %}{{ runs_qs }}&amp;{% endif %}health=failed"{% if health_filter == "failed" %} class="on"{% endif %}>failed</a>
+  </p>
+  {% if recent_health %}
+  <div class="scroll-table">
+  <table>
+    <thead><tr><th>Time</th><th>Received</th><th>Fam</th><th>Release</th><th>Checks</th></tr></thead>
+    <tbody>
+    {% for h in recent_health %}
+      <tr>
+        <td class="muted"><a href="#" class="health-link" data-script="{{ h.pk }}">{{ h.timestamp|date:"Y-m-d H:i" }}</a></td>
+        <td class="muted">{{ h.timestamp|ago }}</td>
+        <td>v{{ h.family }}</td>
+        <td>{{ h.info.ubuntu_release|default:"—" }}</td>
+        <td>
+          {% if h.failure_checks %}
+            {% for k in h.failure_checks %}<span class="badge bad">{{ k }}</span>{% endfor %}
+          {% else %}<span class="badge ok">OK</span>{% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p class="muted">No health reports recorded.</p>
+  {% endif %}
+</div>
+
+<div>
+  <h2>Recent ansible runs</h2>
+  <p class="table-filter">
+    <a href="?{% if health_qs %}{{ health_qs }}{% endif %}"{% if runs_filter != "failed" %} class="on"{% endif %}>all</a>
+    <a href="?{% if health_qs %}{{ health_qs }}&amp;{% endif %}runs=failed"{% if runs_filter == "failed" %} class="on"{% endif %}>changes or failures</a>
+  </p>
+  {% if recent_runs %}
+  <div class="scroll-table">
+  <table>
+    <thead><tr><th>Time</th><th class="num">ok</th><th class="num">changed</th><th class="num">failures</th><th class="num">unreachable</th></tr></thead>
+    <tbody>
+    {% for r in recent_runs %}
+      <tr>
+        <td class="muted">{{ r.timestamp|date:"Y-m-d H:i" }}</td>
+        <td class="num">{{ r.ok|default:0 }}</td>
+        <td class="num">{% if r.changed %}<span class="text-warn">{{ r.changed }}</span>{% else %}0{% endif %}</td>
+        <td class="num">{% if r.failures %}<span class="text-bad">{{ r.failures }}</span>{% else %}0{% endif %}</td>
+        <td class="num">{% if r.unreachable %}<span class="text-bad">{{ r.unreachable }}</span>{% else %}0{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p class="muted">No ansible runs recorded.</p>
+  {% endif %}
+</div>
+
+<h2>SSH host keys</h2>
+{% if hostkeys %}
+<table>
+  <thead><tr><th>Type</th><th>Key</th><th>Comment</th></tr></thead>
+  <tbody>
+  {% for k in hostkeys %}
+    <tr><td>{{ k.keytype }}</td><td><code>{{ k.sshkey|truncatechars:40 }}</code></td><td class="muted">{{ k.keyid|default:"—" }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted">No host keys recorded.</p>
+{% endif %}
+{% endblock %}
+
+{% block scripts_extra %}
+{% for h in recent_health %}
+  {% with script_id=h.pk %}
+    {{ h.summary|json_script:script_id }}
+  {% endwith %}
+{% endfor %}
+{{ descriptions|json_script:"health-descriptions" }}
+
+<div class="modal-overlay" id="healthModal">
+  <div class="modal">
+    <div class="modal-header">
+      <h3 id="healthModalTitle">Health report</h3>
+      <button type="button" class="modal-close" id="healthModalClose">Close</button>
+    </div>
+    <pre id="healthModalBody"></pre>
+  </div>
+</div>
+
+<script>
+(function () {
+  var modal = document.getElementById('healthModal');
+  var title = document.getElementById('healthModalTitle');
+  var body = document.getElementById('healthModalBody');
+
+  function escapeHtml(s) {
+    var d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML;
+  }
+
+  var descEl = document.getElementById('health-descriptions');
+  var descriptions = descEl ? JSON.parse(descEl.textContent) : {};
+
+  function renderTable(data) {
+    var html = '';
+    if (data.info && Object.keys(data.info).length) {
+      html += '<h4>Info</h4><table><thead><tr><th>Key</th><th>Value</th></tr></thead><tbody>';
+      Object.keys(data.info).forEach(function (k) {
+        var v = data.info[k];
+        if (typeof v === 'object' && v !== null) v = JSON.stringify(v);
+        html += '<tr><td>' + escapeHtml(k) + '</td><td>' + escapeHtml(v) + '</td></tr>';
+      });
+      html += '</tbody></table>';
+    }
+    if (data.health && Object.keys(data.health).length) {
+      html += '<h4>Health checks</h4><table><thead><tr><th>Status</th><th>Description</th></tr></thead><tbody>';
+      Object.keys(data.health).forEach(function (k) {
+        var badge = data.health[k] === false
+          ? '<span class="badge bad">FAIL</span>'
+          : '<span class="badge ok">OK</span>';
+        var desc = descriptions[k]
+          ? escapeHtml(descriptions[k])
+          : escapeHtml(k);
+        html += '<tr><td>' + badge + '</td><td>' + desc + '</td></tr>';
+      });
+      html += '</tbody></table>';
+    }
+    return html;
+  }
+
+  function closeModal() { modal.classList.remove('open'); }
+  document.getElementById('healthModalClose').addEventListener('click', closeModal);
+  modal.addEventListener('click', function (e) { if (e.target === modal) closeModal(); });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') closeModal(); });
+
+  document.querySelectorAll('.health-link').forEach(function (link) {
+    link.addEventListener('click', function (e) {
+      e.preventDefault();
+      var el = document.getElementById(link.dataset.script);
+      var text = el ? el.textContent : '{}';
+      var data;
+      try { data = JSON.parse(text); } catch (err) { data = text; }
+      title.textContent = 'Health report — ' + link.textContent;
+      if (typeof data === 'object' && data !== null) {
+        body.innerHTML = renderTable(data);
+      } else {
+        body.textContent = JSON.stringify(data, null, 2);
+      }
+      modal.classList.add('open');
+    });
+  });
+
+  document.querySelectorAll('.live-status').forEach(function (btn) {
+    btn.addEventListener('click', function (e) {
+      e.preventDefault();
+      title.textContent = 'Live status — ' + btn.dataset.host;
+      body.innerHTML = '<p class="muted">Loading…</p>';
+      modal.classList.add('open');
+      fetch(btn.dataset.url)
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          if (data && data.error) {
+            body.innerHTML = '<p class="muted">' + escapeHtml(data.error) + '</p>';
+          } else {
+            body.innerHTML = renderTable(data);
+          }
+        })
+        .catch(function () {
+          body.innerHTML = '<p class="muted">Could not retrieve live status.</p>';
+        });
+    });
+  });
+})();
+</script>
+{% endblock %}

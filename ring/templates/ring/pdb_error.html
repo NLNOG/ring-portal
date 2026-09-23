@@ -1,0 +1,7 @@
+{% extends "ring/base.html" %}
+{% block title %}PeeringDB login — NLNOG RING{% endblock %}
+{% block content %}
+<h1>PeeringDB login</h1>
+<p class="text-bad">{{ message }}</p>
+<p><a href="{% url 'ring-login' %}">Back to log in</a></p>
+{% endblock %}

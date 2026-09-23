@@ -1,0 +1,9 @@
+.venv/
+db.sqlite3
+ring.sql
+__pycache__/
+*.pyc
+*.swp
+venv
+ring-admin.py
+ringweb/settings.py

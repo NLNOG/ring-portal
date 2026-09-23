@@ -1,0 +1,108 @@
+{% extends "ring/base.html" %}
+{% block title %}Signups — NLNOG RING{% endblock %}
+{% block content %}
+<h1>Signup requests</h1>
+{% if signups %}
+<table class="table">
+  <thead>
+    <tr>
+      <th>Requested</th>
+      <th>Username</th>
+      <th>Email</th>
+      <th>Organisation</th>
+      <th>Ring username</th>
+      <th>Notes</th>
+      <th>Status</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for s in signups %}
+    <tr>
+      <td>{{ s.created|date:"Y-m-d H:i" }}</td>
+      <td>{{ s.django_user.username }}</td>
+      <td>{{ s.django_user.email }}</td>
+      <td>{{ s.company.company }}</td>
+      <td>{{ s.ring_username|default:"—" }}</td>
+      <td class="muted">{{ s.notes|default:"—" }}</td>
+      <td>
+        {% if s.approved %}
+          <span class="pill good">Approved {{ s.approved_at|date:"Y-m-d" }} by {{ s.approved_by.username }}</span>
+        {% else %}
+          <span class="pill bad">Pending</span>
+        {% endif %}
+      </td>
+      <td class="nowrap">
+        {% if not s.approved %}
+        <form class="inline" method="post" action="{% url 'ring-signup-approve' s.pk %}">
+          {% csrf_token %}
+          <label class="muted"><input type="checkbox" name="admin_staff"> staff</label>
+          <button type="submit" name="role" value="user" class="btn-outline">Approve user</button>
+        </form>
+        <form class="inline" method="post" action="{% url 'ring-signup-approve' s.pk %}">
+          {% csrf_token %}
+          <button type="submit" name="role" value="admin" class="btn-outline">Approve as ring admin</button>
+        </form>
+        <form class="inline" method="post" action="{% url 'ring-signup-reject' s.pk %}"
+              onsubmit="return confirm('Reject {{ s.django_user.username }}?');">
+          {% csrf_token %}
+          <button type="submit" class="btn-outline text-bad">Reject</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted">No signup requests.</p>
+{% endif %}
+
+<h2>PeeringDB signup requests</h2>
+{% if pdb_signups %}
+<table class="table">
+  <thead>
+    <tr>
+      <th>Requested</th>
+      <th>Username</th>
+      <th>Email</th>
+      <th>Network</th>
+      <th>Status</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for s in pdb_signups %}
+    <tr>
+      <td>{{ s.created|date:"Y-m-d H:i" }}</td>
+      <td>{{ s.django_user.username }}</td>
+      <td>{{ s.django_user.email }}</td>
+      <td>AS{{ s.asn }} — {{ s.net_name|default:"—" }}</td>
+      <td>
+        {% if s.approved %}
+          <span class="pill good">Approved {{ s.approved_at|date:"Y-m-d" }} by {{ s.approved_by.username }}</span>
+        {% else %}
+          <span class="pill bad">Pending</span>
+        {% endif %}
+      </td>
+      <td class="nowrap">
+        {% if not s.approved %}
+        <form class="inline" method="post" action="{% url 'ring-pdb-signup-approve' s.pk %}">
+          {% csrf_token %}
+          <button type="submit" class="btn-outline">Approve</button>
+        </form>
+        <form class="inline" method="post" action="{% url 'ring-pdb-signup-reject' s.pk %}"
+              onsubmit="return confirm('Reject {{ s.django_user.username }}?');">
+          {% csrf_token %}
+          <button type="submit" class="btn-outline text-bad">Reject</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted">No PeeringDB signup requests.</p>
+{% endif %}
+{% endblock %}

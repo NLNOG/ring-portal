@@ -1,0 +1,74 @@
+{% extends "ring/base.html" %}
+{% load ring_filters %}
+{% block title %}NLNOG RING — Machines{% endblock %}
+{% block content %}
+<h1>Machines</h1>
+
+<form class="filters" method="get">
+  <input type="hidden" name="participant" value="{{ participant }}">
+  <input type="hidden" name="owner" value="{{ owner }}">
+  <input type="text" name="q" value="{{ q }}" placeholder="Search hostname or city">
+  <select name="country">
+    <option value="">Country</option>
+    {% for c in countries %}
+    <option value="{{ c }}" {% if country == c %}selected{% endif %}>{{ c }}</option>
+    {% endfor %}
+  </select>
+  <input type="text" name="state" value="{{ state }}" placeholder="State" maxlength="2">
+  <select name="ubuntu">
+    <option value="">Ubuntu</option>
+    {% for u in ubuntu_options %}
+    <option value="{{ u }}" {% if ubuntu == u %}selected{% endif %}>{{ u }}</option>
+    {% endfor %}
+  </select>
+  <label><input type="radio" name="status" value="" {% if status != "active" and status != "inactive" %}checked{% endif %}> Any status</label>
+  <label><input type="radio" name="status" value="active" {% if status == "active" %}checked{% endif %}> Active only</label>
+  <label><input type="radio" name="status" value="inactive" {% if status == "inactive" %}checked{% endif %}> Inactive only</label>
+  <select name="ipv4">
+    <option value="">IPv4 any</option>
+    <option value="up" {% if ipv4 == "up" %}selected{% endif %}>IPv4 up</option>
+    <option value="down" {% if ipv4 == "down" %}selected{% endif %}>IPv4 down</option>
+  </select>
+  <select name="ipv6">
+    <option value="">IPv6 any</option>
+    <option value="up" {% if ipv6 == "up" %}selected{% endif %}>IPv6 up</option>
+    <option value="down" {% if ipv6 == "down" %}selected{% endif %}>IPv6 down</option>
+  </select>
+  <button type="submit">Filter</button>
+</form>
+
+{% if participant_company %}
+<p class="filter-note">Showing machines for <strong>{{ participant_company }}</strong> <a href="{% url 'ring-machines' %}" class="badge muted">clear</a></p>
+{% endif %}
+{% if owner_username %}
+<p class="filter-note">Showing machines owned by <strong>{{ owner_username }}</strong> <a href="{% url 'ring-machines' %}" class="badge muted">clear</a></p>
+{% endif %}
+
+<table class="mono">
+  <thead>
+    <tr>
+      <th>Hostname</th><th>Country</th><th>City</th><th>Datacenter</th>
+      <th>Status</th><th>Last active</th><th>Owner</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for m in machines %}
+    <tr>
+      <td><a href="{% url 'ring-machine-detail' m.hostname %}">{{ m.short_hostname }}</a></td>
+      <td>{{ m.country|flag }} {{ m.country|default:"—" }}</td>
+      <td>{{ m.city|default:"—" }}</td>
+      <td>{{ m.dc|default:"—" }}</td>
+      <td class="nowrap">
+        {% if m.active %}<span class="badge ok">active</span>{% else %}<span class="badge bad">inactive</span>{% endif %}
+        {% if m.active and not m.alive_v4 %}<span class="badge warn">no v4</span>{% endif %}
+        {% if m.active and not m.alive_v6 %}<span class="badge warn">no v6</span>{% endif %}
+      </td>
+      <td class="muted">{{ m.last_active|date:"Y-m-d"|default:"—" }}</td>
+      <td class="muted">{{ m.owner.username }}</td>
+    </tr>
+    {% empty %}
+    <tr><td colspan="7" class="muted">No machines match.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

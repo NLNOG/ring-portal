@@ -1,0 +1,16 @@
+{% extends "ring/base.html" %}
+{% block title %}Choose your network — NLNOG RING{% endblock %}
+{% block content %}
+<h1>Choose your network</h1>
+<p class="muted">Your PeeringDB account can act for several networks. Pick the one you represent on the RING.</p>
+<form class="filters" method="post" action="{% url 'ring-pdb-pick' %}">
+  {% csrf_token %}
+  {% for n in candidates %}
+  <label class="radio-row">
+    <input type="radio" name="asn" value="{{ n.asn }}">
+    <span>AS{{ n.asn }} — {{ n.name }}</span>
+  </label>
+  {% endfor %}
+  <button type="submit">Continue</button>
+</form>
+{% endblock %}

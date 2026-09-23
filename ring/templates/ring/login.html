@@ -1,0 +1,20 @@
+{% extends "ring/base.html" %}
+{% block title %}Log in — NLNOG RING{% endblock %}
+{% block content %}
+<h1>Log in</h1>
+{% if form.non_field_errors %}
+<p class="text-bad">{{ form.non_field_errors }}</p>
+{% endif %}
+{% if pdb_enabled %}
+<p><a href="{% url 'ring-pdb-login' %}" class="btn-outline">Log in with PeeringDB</a></p>
+<hr class="muted">
+{% endif %}
+<form class="filters" method="post" action="{% url 'ring-login' %}">
+  {% csrf_token %}
+  <input type="hidden" name="next" value="{{ next }}">
+  <input type="text" name="username" placeholder="Username" autofocus>
+  <input type="password" name="password" placeholder="Password">
+  <button type="submit">Log in</button>
+</form>
+<p class="muted">No account yet? <a href="{% url 'ring-signup' %}">Request one</a>.</p>
+{% endblock %}

@@ -1,0 +1,76 @@
+{% extends "ring/base.html" %}
+{% block title %}NLNOG RING — Overview{% endblock %}
+{% block content %}
+<h1>Overview</h1>
+
+<div class="kpis">
+  <a class="kpi" href="{% url 'ring-machines' %}"><div class="num">{{ total }}</div><div class="lbl">Machines</div></a>
+  <a class="kpi" href="{% url 'ring-machines' %}?status=active"><div class="num" style="color:var(--ok)">{{ active }}</div><div class="lbl">Active machines</div></a>
+  <a class="kpi" href="{% url 'ring-machines' %}?status=inactive"><div class="num" style="color:var(--bad)">{{ inactive }}</div><div class="lbl">Inactive</div></a>
+  <a class="kpi" href="{% url 'ring-participants' %}"><div class="num">{{ participants }}</div><div class="lbl">Participants</div></a>
+  <a class="kpi" href="{% url 'ring-machines' %}?status=active"><div class="num" style="color:var(--warn)">{{ dead_v4 }} <span class="muted" style="font-size:14px;font-weight:400">v4</span> / {{ dead_v6 }} <span class="muted" style="font-size:14px;font-weight:400">v6</span></div><div class="lbl">Active, no IPv4 / IPv6</div></a>
+  <a class="kpi" href="#issues"><div class="num" style="color:var(--bad)">{{ need_reboot }}</div><div class="lbl">Need reboot</div></a>
+  <a class="kpi" href="#issues"><div class="num" style="color:var(--bad)">{{ updates_pending }}</div><div class="lbl">Updates pending</div></a>
+  <a class="kpi" href="#issues"><div class="num" style="color:var(--bad)">{{ security_updates }}</div><div class="lbl">Security updates</div></a>
+</div>
+
+<h2>Ubuntu releases (last 7 days)</h2>
+{% if ubuntu_items %}
+<canvas id="ubuntuChart"></canvas>
+{% else %}
+<p class="muted">No health reports in the last 7 days.</p>
+{% endif %}
+
+<h2 id="issues">Machines with issues <span class="badge muted">{{ issue_rows|length }}</span></h2>
+<p class="table-filter">
+  <a href="?"{% if issue_type == "all" %} class="on"{% endif %}>all ({{ issue_rows|length }})</a>
+  <a href="?issues=connectivity"{% if issue_type == "connectivity" %} class="on"{% endif %}>connectivity ({{ type_counts.connectivity }})</a>
+  <a href="?issues=updates"{% if issue_type == "updates" %} class="on"{% endif %}>updates ({{ type_counts.updates }})</a>
+  <a href="?issues=reboot"{% if issue_type == "reboot" %} class="on"{% endif %}>reboot ({{ type_counts.reboot }})</a>
+  <a href="?issues=ansible_failed"{% if issue_type == "ansible_failed" %} class="on"{% endif %}>ansible failed ({{ type_counts.ansible_failed }})</a>
+  <a href="?issues=inactive"{% if issue_type == "inactive" %} class="on"{% endif %}>inactive ({{ type_counts.inactive }})</a>
+</p>
+{% if issue_rows %}
+<div class="scroll-table">
+<table class="mono">
+  <thead><tr>
+    <th>Host</th><th>Status</th><th>Reboot</th><th class="num">Updates</th><th class="num">Sec</th>
+    <th>IPv4</th><th>IPv6</th><th class="num">Failed</th><th>Last active</th>
+  </tr></thead>
+  <tbody>
+  {% for c in issue_rows %}
+    <tr>
+      <td><a href="{% url 'ring-machine-detail' c.fqdn %}">{{ c.short }}</a></td>
+      <td>{% if c.m.active %}<span class="badge ok">active</span>{% else %}<span class="badge bad">inactive</span>{% endif %}</td>
+      <td>{% if c.needs_reboot %}<span class="text-bad">yes</span>{% else %}<span class="muted">no</span>{% endif %}</td>
+      <td class="num">{% if c.updates %}<span class="text-bad">{{ c.updates }}</span>{% else %}0{% endif %}</td>
+      <td class="num">{% if c.security_updates %}<span class="text-bad">{{ c.security_updates }}</span>{% else %}0{% endif %}</td>
+      <td>{% if c.m.alive_v4 %}<span class="badge ok">up</span>{% else %}<span class="badge bad">down</span>{% endif %}</td>
+      <td>{% if c.m.alive_v6 %}<span class="badge ok">up</span>{% else %}<span class="badge bad">down</span>{% endif %}</td>
+      <td class="num">{% if c.failures %}<span class="text-bad">{{ c.failures }}</span>{% else %}0{% endif %}</td>
+      <td class="muted">{{ c.m.last_active|date:"Y-m-d"|default:"—" }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p class="muted">No machines match this filter.</p>
+{% endif %}
+{% endblock %}
+
+{% block scripts_extra %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<script>
+const labels = {{ ubuntu_labels|safe }};
+const data = {{ ubuntu_values|safe }};
+new Chart(document.getElementById('ubuntuChart'), {
+  type: 'doughnut',
+  data: {
+    labels: labels,
+    datasets: [{ data: data, backgroundColor: ['#233773','#4db8e8','#1d60a3','#1e7e34','#a31d1d','#92610b'] }]
+  },
+  options: { plugins: { legend: { position: 'right', labels: { color: '#333333' } } } }
+});
+</script>
+{% endblock %}

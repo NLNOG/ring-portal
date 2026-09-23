@@ -1,0 +1,37 @@
+{% extends "ring/base.html" %}
+{% block title %}NLNOG RING — Accounts{% endblock %}
+{% block content %}
+<h1>Accounts</h1>
+
+<form class="filters" method="get">
+  <input type="text" name="q" value="{{ q }}" placeholder="Search username, email or participant">
+  <label><input type="radio" name="status" value="" {% if status != "active" and status != "inactive" %}checked{% endif %}> Any status</label>
+  <label><input type="radio" name="status" value="active" {% if status == "active" %}checked{% endif %}> Active only</label>
+  <label><input type="radio" name="status" value="inactive" {% if status == "inactive" %}checked{% endif %}> Inactive only</label>
+  <button type="submit">Filter</button>
+</form>
+
+<table>
+  <thead>
+    <tr>
+      <th>Username</th><th>Participant</th>
+      <th>Admin</th><th>Status</th><th>Machines</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for u in users %}
+    <tr>
+      <td class="muted">{{ u.username }}</td>
+      <td><a href="{% url 'ring-participants' %}?p={{ u.participant_id }}">{{ u.participant.company }}</a></td>
+      <td>{% if u.admin %}<span class="badge ok">admin</span>{% else %}<span class="badge muted">no</span>{% endif %}</td>
+      <td>
+        <td>{% if u.active %}<span class="badge ok">active</span>{% else %}<span class="badge bad">inactive</span>{% endif %}
+      </td>
+      <td class="num"><a href="{% url 'ring-machines' %}?owner={{ u.pk }}">{{ u.machine_count }}</a></td>
+    </tr>
+    {% empty %}
+    <tr><td colspan="5" class="muted">No accounts match.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

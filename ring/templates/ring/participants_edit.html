@@ -1,0 +1,20 @@
+{% extends "ring/base.html" %}
+{% block title %}Edit {{ participant.company }} — NLNOG RING{% endblock %}
+{% block content %}
+<h1>Edit organisation — {{ participant.company }}</h1>
+<form method="post" action="{% url 'ring-participant-edit' participant.pk %}" class="edit-form">
+  {% csrf_token %}
+  {% if form.non_field_errors %}<p class="text-bad">{{ form.non_field_errors }}</p>{% endif %}
+  {% for field in form %}
+    <div class="field">
+      <label for="{{ field.id_for_label }}">{{ field.label }}{% if field.field.required %} *{% endif %}</label>
+      {{ field }}
+      {% if field.errors %}<p class="text-bad">{{ field.errors }}</p>{% endif %}
+    </div>
+  {% endfor %}
+  <div class="field">
+    <button type="submit" class="btn">Save</button>
+    <a class="btn btn-outline" href="{% url 'ring-participants' %}">Cancel</a>
+  </div>
+</form>
+{% endblock %}

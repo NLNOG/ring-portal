@@ -1,0 +1,8 @@
+{% extends "ring/base.html" %}
+{% block title %}Login required — NLNOG RING{% endblock %}
+{% block content %}
+<h1>Login required</h1>
+<p class="muted">This site is only accessible to registered users.</p>
+<p><a class="btn" href="{% url 'ring-login' %}">Log in</a></p>
+<p class="muted">No account yet? <a href="{% url 'ring-signup' %}">Request one</a>.</p>
+{% endblock %}

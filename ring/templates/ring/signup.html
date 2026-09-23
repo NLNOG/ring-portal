@@ -1,0 +1,21 @@
+{% extends "ring/base.html" %}
+{% block title %}Request access — NLNOG RING{% endblock %}
+{% block content %}
+<h1>Request access</h1>
+<p class="muted">New accounts need approval by a RING administrator before they can be used.</p>
+<form class="filters" method="post" action="{% url 'ring-signup' %}">
+  {% csrf_token %}
+  <input type="text" name="username" placeholder="Username" required autofocus>
+  <input type="email" name="email" placeholder="Email address" required>
+  <input type="password" name="password" placeholder="Password" required>
+  <input type="password" name="password2" placeholder="Repeat password" required>
+  <select name="company" required>
+    <option value="">— organisation —</option>
+    {% for p in companies %}<option value="{{ p.pk }}">{{ p.company }}</option>{% endfor %}
+  </select>
+  <input type="text" name="ring_username" placeholder="Existing ring username (optional)">
+  <textarea name="notes" rows="3" placeholder="Notes for the administrator (optional)"></textarea>
+  <button type="submit">Submit request</button>
+</form>
+<p class="muted">Already registered? <a href="{% url 'ring-login' %}">Log in</a>.</p>
+{% endblock %}

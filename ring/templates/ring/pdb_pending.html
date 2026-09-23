@@ -1,0 +1,7 @@
+{% extends "ring/base.html" %}
+{% block title %}Application received — NLNOG RING{% endblock %}
+{% block content %}
+<h1>Application received</h1>
+<p>Your ASN is new to the RING. A RING administrator will review and activate your account. You will be able to log in once approved.</p>
+<p><a href="{% url 'ring-login' %}">Back to log in</a></p>
+{% endblock %}

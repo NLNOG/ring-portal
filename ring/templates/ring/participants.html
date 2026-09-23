@@ -1,0 +1,195 @@
+{% extends "ring/base.html" %}
+{% block title %}NLNOG RING — Participants{% endblock %}
+{% block content %}
+<h1>Participants</h1>
+
+<form class="filters" method="get">
+  <input type="text" name="q" value="{{ q }}" placeholder="Search company, contact, email…">
+  <label><input type="checkbox" name="machines" value="yes" {% if machines %}checked{% endif %} onchange="this.form.submit()"> Only participants with machines</label>
+  <button type="submit">Search</button>
+</form>
+{% if q or machines %}<p class="muted table-filter"><a href="{% url 'ring-participants' %}">clear filters</a></p>{% endif %}
+
+<table>
+  <thead>
+    <tr>
+      <th>Company</th><th>Contact</th><th>NOC email</th>
+      <th>Machines</th><th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for p in participants %}
+    <tr>
+      <td><a href="#" class="participant-link" data-url="{% url 'ring-participant-info' p.pk %}">{{ p.company }}</a></td>
+      <td class="muted">{{ p.contact|default:"—" }}</td>
+      <td class="muted">{{ p.nocemail|default:"—" }}</td>
+      <td><a href="{% url 'ring-machines' %}?participant={{ p.pk }}">{{ p.machine_count }}</a></td>
+      <td class="nowrap">
+        {% if editable_pks is None or p.pk in editable_pks %}
+        <a class="btn btn-outline" href="{% url 'ring-participant-edit' p.pk %}">Edit</a>
+        {% endif %}
+      </td>
+    </tr>
+    {% empty %}
+    <tr><td colspan="6" class="muted">No participants.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<div class="modal-overlay" id="participant-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <h3 id="participant-modal-title">Participant</h3>
+      <button class="modal-close" type="button">Close</button>
+    </div>
+    <div id="participant-modal-body"></div>
+  </div>
+</div>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<script>
+  (function () {
+    var overlay = document.getElementById('participant-modal');
+    var participantMap = null;
+    function close() {
+      overlay.classList.remove('open');
+      if (participantMap) { participantMap.remove(); participantMap = null; }
+    }
+    overlay.querySelector('.modal-close').addEventListener('click', close);
+    overlay.addEventListener('click', function (e) {
+      if (e.target === overlay) close();
+    });
+
+    function text(v) {
+      return String(v).replace(/[&<>"]/g, function (c) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+      });
+    }
+
+    function linkify(v) {
+      var html = text(v);
+      html = html.replace(/(https?:\/\/\S+)/g, function (m) {
+        return '<a href="' + m.replace(/&amp;/g, '&') + '" target="_blank" rel="noopener">' + m + '</a>';
+      });
+      return html.replace(/([^\s@<>]+@[^\s@<]+\.[^\s@<>]+)/g, function (m) {
+        return '<a href="mailto:' + m.replace(/&amp;/g, '&') + '">' + m + '</a>';
+      });
+    }
+
+    function cell(v) {
+      if (v === null || v === undefined || v === '') return '<span class="muted">—</span>';
+      return linkify(v);
+    }
+
+    document.querySelectorAll('.participant-link').forEach(function (a) {
+      a.addEventListener('click', function (e) {
+        e.preventDefault();
+        var title = a.textContent;
+        fetch(a.dataset.url)
+          .then(function (r) { return r.json(); })
+          .then(function (d) {
+            document.getElementById('participant-modal-title').textContent = title;
+            var rows = '';
+            var order = [['company', 'Company'], ['machine_count', 'Machines'], ['contact', 'Contact'],
+              ['email', 'Email'], ['nocemail', 'NOC email'], ['url', 'URL'],
+              ['companydesc', 'Description'], ['public', 'Public']];
+            order.forEach(function (pair) {
+              var k = pair[0], label = pair[1], v = d[k];
+              if (v !== null && v !== undefined && v !== '' && (k !== 'public' || v !== null)) {
+                var td;
+                if (k === 'machine_count') {
+                  td = '<a href="/machines/?participant=' + d.id + '">' + v + '</a>';
+                } else {
+                  td = cell(v);
+                }
+                rows += '<tr><th>' + label + '</th><td>' + td + '</td></tr>';
+              }
+            });
+            if (d.tstamp) {
+              rows += '<tr><th>Registered</th><td>' + text(d.tstamp) + '</td></tr>';
+            }
+            var mapHtml = '';
+            var geoNodes = [];
+            if (d.nodes && d.nodes.length) {
+              geoNodes = d.nodes.filter(function (n) {
+                return n.lat !== null && n.lon !== null;
+              });
+              var heading = '<h4>Machines (' + d.nodes.length + ')</h4>';
+              if (geoNodes.length) {
+                var lats = geoNodes.map(function (n) { return n.lat; });
+                var lons = geoNodes.map(function (n) { return n.lon; });
+                var minLat = Math.min.apply(null, lats), maxLat = Math.max.apply(null, lats);
+                var minLon = Math.min.apply(null, lons), maxLon = Math.max.apply(null, lons);
+                var cLat = ((minLat + maxLat) / 2).toFixed(4);
+                var cLon = ((minLon + maxLon) / 2).toFixed(4);
+                mapHtml = '<div class="map"><div id="participant-map"></div>' +
+                  '<p class="muted"><a href="https://www.openstreetmap.org/#map=12/' + cLat + '/' + cLon +
+                  '" target="_blank" rel="noopener">Open in OpenStreetMap</a></p></div>';
+              }
+              var nodeRows = d.nodes.map(function (n) {
+                function onoff(v) {
+                  if (v === true) return '<span class="badge ok">up</span>';
+                  if (v === false) return '<span class="badge bad">down</span>';
+                  return '<span class="muted">—</span>';
+                }
+                var asn = n.asn
+                  ? '<a href="https://www.peeringdb.com/asn/' + n.asn + '" target="_blank" rel="noopener">' + n.asn + '</a>'
+                  : '<span class="muted">—</span>';
+                return '<tr>' +
+                  '<td><a href="/machines/' + n.hostname + '/">' + text(n.short_hostname) + '</a></td>' +
+                  '<td>' + text(n.city || '—') + '</td>' +
+                  '<td>' + (n.flag || '') + ' ' + text(n.country || '—') + '</td>' +
+                  '<td>' + asn + '</td>' +
+                  '<td>' + onoff(n.alive_v4) + '</td>' +
+                  '<td>' + onoff(n.alive_v6) + '</td>' +
+                  '</tr>';
+              }).join('');
+              mapHtml += heading +
+                '<div class="scroll-table"><table><thead><tr>' +
+                '<th>Machine</th><th>City</th><th>Country</th><th>ASN</th><th>v4</th><th>v6</th>' +
+                '</tr></thead><tbody>' + nodeRows + '</tbody></table></div>';
+            }
+            document.getElementById('participant-modal-body').innerHTML =
+              '<table>' + rows + '</table>' + mapHtml;
+            overlay.classList.add('open');
+            if (geoNodes.length && window.L && document.getElementById('participant-map')) {
+              if (participantMap) { participantMap.remove(); }
+              var map = L.map('participant-map');
+              // OSM tile policy requires a Referer header; the app's global
+              // Referrer-Policy strips it on cross-origin subresources, so pin
+              // a per-tile referrerpolicy that always sends the page URL.
+              var ReferrerTileLayer = L.TileLayer.extend({
+                createTile: function (coords, done) {
+                  var tile = L.TileLayer.prototype.createTile.call(this, coords, done);
+                  tile.referrerPolicy = 'no-referrer-when-downgrade';
+                  return tile;
+                }
+              });
+              new ReferrerTileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                maxZoom: 19,
+                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+              }).addTo(map);
+              var bounds = [];
+              geoNodes.forEach(function (n) {
+                var m = L.marker([n.lat, n.lon], { title: n.short_hostname }).addTo(map);
+                m.bindPopup('<a href="/machines/' + n.hostname + '/">' + text(n.short_hostname) + '</a>');
+                bounds.push([n.lat, n.lon]);
+              });
+              map.fitBounds(bounds, { padding: [40, 40], maxZoom: 14 });
+              map.invalidateSize();
+              participantMap = map;
+            }
+          });
+      });
+    });
+
+    var autoPk = '{{ auto_pk }}';
+    if (autoPk) {
+      var match = document.querySelector('.participant-link[data-url$="/' + autoPk + '/info.json/"]');
+      if (match) { match.click(); }
+    }
+  })();
+</script>
+{% endblock %}
