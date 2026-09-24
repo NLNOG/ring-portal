@@ -10,7 +10,7 @@ participant is reported so an admin can review.
 from django.core.management.base import BaseCommand
 from django.db.models import Count
 
-from ring.models import Machine, Participant
+from ring.models import Machine, Participant, ParticipantProfile
 from ring.services.profiles import participant_autnum, set_participant_autnum
 
 
@@ -30,8 +30,9 @@ class Command(BaseCommand):
             for p in by_participant
         }
         ambiguous = []
+        conflicts = []
         updated = 0
-        for participant in Participant.objects.all():
+        for participant in Participant.objects.order_by("pk"):
             if participant_autnum(participant.pk) is not None:
                 continue
             asns = list(
@@ -50,6 +51,14 @@ class Command(BaseCommand):
                 asn = max(counts, key=counts.get)
             else:
                 asn = asns[0]
+            claimed = (
+                ParticipantProfile.objects.filter(autnum=asn)
+                .exclude(participant_id=participant.pk)
+                .first()
+            )
+            if claimed is not None:
+                conflicts.append((participant, asn, claimed.participant_id))
+                continue
             set_participant_autnum(participant.pk, asn)
             updated += 1
             if verbose:
@@ -80,3 +89,21 @@ class Command(BaseCommand):
                     self.stdout.write(
                         "  participant %s (AS%s)" % (participant.company, participant_autnum(participant.pk))
                     )
+        if conflicts:
+            self.stdout.write(
+                self.style.WARNING(
+                    "ASNs already assigned to another participant (manual review):"
+                )
+            )
+            for participant, asn, owner_id in conflicts:
+                owner = Participant.objects.filter(pk=owner_id).first()
+                self.stdout.write(
+                    "  participant %s (pk=%s) <- AS%s (already %s, pk=%s)"
+                    % (
+                        participant.company,
+                        participant.pk,
+                        asn,
+                        owner.company if owner else "participant",
+                        owner_id,
+                    )
+                )

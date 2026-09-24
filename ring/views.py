@@ -5,6 +5,7 @@ import re
 import secrets
 import urllib.request
 from datetime import timedelta
+from functools import wraps
 
 from django import forms
 from django.conf import settings
@@ -42,7 +43,9 @@ from ring.services.peeringdb import (
 )
 from ring.services.profiles import (
     link_ring_user,
+    participant_autnum,
     participant_for_pdb,
+    profile_for_user,
     ring_user,
     ring_user_for_pdb,
     set_participant_autnum,
@@ -94,35 +97,34 @@ def country_flag(country_code):
     return "".join(chr(ord(c) + 0x1F1E6 - ord("A")) for c in code)
 
 
-def index(request):
-    if not request.user.is_authenticated:
-        return render(request, "ring/login_required.html")
-    now = timezone.now()
-    since = now - timedelta(days=7)
+def admin_or_portal(view):
+    """Admin-only page; regular members are sent to their portal instead."""
 
-    total = Machine.objects.count()
-    active = Machine.objects.filter(active=True).count()
-    inactive = total - active
-    participants = Participant.objects.count()
+    @login_required
+    @wraps(view)
+    def wrapped(request, *args, **kwargs):
+        if not user_can_manage(request.user):
+            return redirect("ring-my")
+        return view(request, *args, **kwargs)
 
-    ubuntu_releases, _, _ = cached_ubuntu_releases()
-    ubuntu_items = sorted(ubuntu_releases.items())
+    return wrapped
 
-    connectivity_qs = (
-        Machine.objects.filter(active=True)
-        .filter(Q(alive_v4=False) | Q(alive_v6=False))
-        .select_related("owner")
+
+def _can_view_machine(request, machine):
+    """Admins see any machine; members only their own participant's nodes."""
+    if user_can_manage(request.user):
+        return True
+    ru = ring_user(request.user)
+    return bool(
+        ru and ru.participant_id and machine.owner.participant_id == ru.participant_id
     )
-    dead_v4 = connectivity_qs.filter(alive_v4=False).count()
-    dead_v6 = connectivity_qs.filter(alive_v6=False).count()
 
-    update_alerts = cached_update_alerts()
 
-    machines_map = {
-        m.hostname: m for m in Machine.objects.select_related("owner")
-    }
-    short2fqdn = {short(fqdn): fqdn for fqdn in machines_map}
-
+def _scoped_issues(machines_qs, since):
+    """Build the issue map (see index) restricted to a machine queryset."""
+    machines = list(machines_qs.select_related("owner"))
+    machines_map = {m.hostname: m for m in machines}
+    short2fqdn = {short(hostname): hostname for hostname in machines_map}
     issues = {}
 
     def mark(fqdn, issue_type):
@@ -142,10 +144,15 @@ def index(request):
         cell["types"].add(issue_type)
         return cell
 
-    for m in connectivity_qs:
-        mark(m.hostname, "connectivity")
+    for m in machines:
+        if m.active and (m.alive_v4 is False or m.alive_v6 is False):
+            mark(m.hostname, "connectivity")
+        if not m.active:
+            mark(m.hostname, "inactive")
 
-    for a in update_alerts.values():
+    for a in cached_update_alerts().values():
+        if a["fqdn"] not in machines_map:
+            continue
         if a["needs_reboot"] or a["updates"] or a["security_updates"]:
             cell = mark(a["fqdn"], "updates")
             cell["needs_reboot"] = a["needs_reboot"]
@@ -160,17 +167,17 @@ def index(request):
             cell = mark(fqdn, "ansible_failed")
             cell["failures"] = f["count"]
 
-    for m in Machine.objects.exclude(active=True).select_related("owner"):
-        mark(m.hostname, "inactive")
+    return issues
 
-    issue_type = request.GET.get("issues", "all")
+
+def _issue_summary(issues, issue_type="all"):
     if issue_type not in (
         "connectivity", "updates", "reboot", "ansible_failed", "inactive"
     ):
         issue_type = "all"
-    issue_rows = sorted(issues.values(), key=lambda c: c["fqdn"])
+    rows = sorted(issues.values(), key=lambda c: c["fqdn"])
     if issue_type != "all":
-        issue_rows = [c for c in issue_rows if issue_type in c["types"]]
+        rows = [c for c in rows if issue_type in c["types"]]
     type_counts = {
         t: sum(1 for c in issues.values() if t in c["types"])
         for t in ("connectivity", "updates", "reboot", "ansible_failed", "inactive")
@@ -178,6 +185,39 @@ def index(request):
     need_reboot = sum(1 for c in issues.values() if c["needs_reboot"])
     updates_pending = sum(1 for c in issues.values() if c["updates"])
     security_updates = sum(1 for c in issues.values() if c["security_updates"])
+    return rows, type_counts, need_reboot, updates_pending, security_updates
+
+
+def index(request):
+    if not request.user.is_authenticated:
+        return render(request, "ring/login_required.html")
+    if not user_can_manage(request.user):
+        return redirect("ring-my")
+    now = timezone.now()
+    since = now - timedelta(days=7)
+
+    total = Machine.objects.count()
+    active = Machine.objects.filter(active=True).count()
+    inactive = total - active
+    participants = Participant.objects.count()
+
+    ubuntu_releases, _, _ = cached_ubuntu_releases()
+    ubuntu_items = sorted(ubuntu_releases.items())
+
+    connectivity_qs = (
+        Machine.objects.filter(active=True)
+        .filter(Q(alive_v4=False) | Q(alive_v6=False))
+        .select_related("owner")
+    )
+    dead_v4 = connectivity_qs.filter(alive_v4=False).count()
+    dead_v6 = connectivity_qs.filter(alive_v6=False).count()
+
+    issues = _scoped_issues(Machine.objects.all(), since)
+
+    issue_type = request.GET.get("issues", "all")
+    issue_rows, type_counts, need_reboot, updates_pending, security_updates = (
+        _issue_summary(issues, issue_type)
+    )
 
     return render(
         request,
@@ -202,7 +242,7 @@ def index(request):
     )
 
 
-@login_required
+@admin_or_portal
 def machines(request):
     qs = Machine.objects.select_related("owner__participant")
     country = request.GET.get("country", "")
@@ -344,6 +384,8 @@ def machine_detail(request, hostname):
     machine = get_object_or_404(
         Machine.objects.select_related("owner__participant"), hostname=hostname
     )
+    if not _can_view_machine(request, machine):
+        return redirect("ring-my")
     hostkeys = machine.hostkeys.all()
     remarks = machine.remarks.all()
 
@@ -412,6 +454,8 @@ def machine_detail(request, hostname):
 def machine_status(request, hostname):
     hostname = fqdn(hostname)
     machine = get_object_or_404(Machine, hostname=hostname)
+    if not _can_view_machine(request, machine):
+        return redirect("ring-my")
     data = _fetch_status(machine.hostname)
     if data is None:
         return JsonResponse(
@@ -421,7 +465,7 @@ def machine_status(request, hostname):
     return JsonResponse(data)
 
 
-@login_required
+@admin_or_portal
 def participant_info(request, pk):
     participant = get_object_or_404(Participant, pk=pk)
     data = {"id": participant.pk, "company": participant.company}
@@ -456,7 +500,7 @@ def participant_info(request, pk):
     return JsonResponse(data)
 
 
-@login_required
+@admin_or_portal
 def users(request):
     qs = RingUser.objects.select_related("participant").annotate(
         machine_count=Count("machines", distinct=True)
@@ -480,7 +524,7 @@ def users(request):
     )
 
 
-@login_required
+@admin_or_portal
 def participants(request):
     participants = Participant.objects.annotate(
         machine_count=Count("users__machines", distinct=True)
@@ -564,7 +608,9 @@ def participant_edit(request, pk):
             messages.success(
                 request, "Organisation %s updated." % participant.company
             )
-            return redirect("ring-participants")
+            return redirect(
+                "ring-my" if not can_rename else "ring-participants"
+            )
     else:
         form = ParticipantEditForm(instance=participant)
         if not can_rename:
@@ -573,6 +619,46 @@ def participant_edit(request, pk):
         request,
         "ring/participants_edit.html",
         {"form": form, "participant": participant, "can_rename": can_rename},
+    )
+
+
+@login_required
+def my_portal(request):
+    """Member landing page: own company, account and nodes only."""
+    ru = ring_user(request.user)
+    participant = ru.participant if (ru and ru.participant_id) else None
+    since = timezone.now() - timedelta(days=7)
+    if participant is None:
+        machines_qs = Machine.objects.none()
+    else:
+        machines_qs = Machine.objects.filter(owner__participant=participant)
+
+    issue_type = request.GET.get("issues", "all")
+    issues = _scoped_issues(machines_qs, since)
+    issue_rows, type_counts, need_reboot, updates_pending, security_updates = (
+        _issue_summary(issues, issue_type)
+    )
+
+    profile = profile_for_user(request.user)
+    return render(
+        request,
+        "ring/my_portal.html",
+        {
+            "ru": ru,
+            "participant": participant,
+            "autnum": participant_autnum(participant) if participant else None,
+            "pdb_id": profile.peeringdb_id if profile else None,
+            "pdb_net_id": profile.peeringdb_net_id if profile else None,
+            "machines": machines_qs.order_by("hostname"),
+            "machine_count": machines_qs.count(),
+            "active_count": machines_qs.filter(active=True).count(),
+            "issue_rows": issue_rows,
+            "issue_type": issue_type,
+            "type_counts": type_counts,
+            "need_reboot": need_reboot,
+            "updates_pending": updates_pending,
+            "security_updates": security_updates,
+        },
     )
 
 

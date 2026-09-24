@@ -46,7 +46,7 @@ def fetch_profile(access_token):
         settings.PDB_ENDPOINT + "profile/v1",
         headers={
             "Authorization": "Bearer %s" % access_token,
-            "User-Agent": "smeagol/ring",
+            "User-Agent": "ring-portal/ring",
             "Accept": "application/json",
         },
     )
@@ -63,7 +63,7 @@ def _post(url, data):
         data=data,
         headers={
             "Content-Type": "application/x-www-form-urlencoded",
-            "User-Agent": "smeagol/ring",
+            "User-Agent": "ring-portal/ring",
             "Accept": "application/json",
         },
     )

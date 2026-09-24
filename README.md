@@ -1,4 +1,4 @@
-# smeagol
+# ring-portal
 
 A Django 5.2 port of the legacy NLNOG RING admin tool (`ring-admin.py`).
 

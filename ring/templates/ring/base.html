@@ -145,10 +145,14 @@ code { background: var(--bg-tint); border: 1px solid var(--border); padding: 2px
 <header>
   <div class="brand">NLNOG&nbsp;RING</div>
   <nav>
+    {% if user_can_manage %}
     <a href="{% url 'ring-index' %}" {% if request.resolver_match.url_name == 'ring-index' %}class="active"{% endif %}>Overview</a>
     <a href="{% url 'ring-machines' %}" {% if request.resolver_match.url_name == 'ring-machines' %}class="active"{% endif %}>Machines</a>
     <a href="{% url 'ring-participants' %}" {% if request.resolver_match.url_name == 'ring-participants' %}class="active"{% endif %}>Participants</a>
     <a href="{% url 'ring-users' %}" {% if request.resolver_match.url_name == 'ring-users' %}class="active"{% endif %}>Accounts</a>
+    {% else %}
+    <a href="{% url 'ring-my' %}" {% if request.resolver_match.url_name in 'ring-my ring-machine-detail ring-machine-status ring-participant-edit' %}class="active"{% endif %}>My RING</a>
+    {% endif %}
   </nav>
   <div class="auth">
     {% if request.user.is_authenticated %}

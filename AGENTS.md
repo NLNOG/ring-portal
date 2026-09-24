@@ -3,7 +3,7 @@
 ## Repo state
 
 Small local git history only (6 commits on `main`), no remote, working tree
-clean. This is a Django 5.2 port ("smeagol") of the NLNOG Ring admin tool.
+clean. This is a Django 5.2 port ("ring-portal") of the NLNOG Ring admin tool.
 Verified environment: `.venv/` (Django 5.2.x + deps), SQLite, DEBUG=True.
 Migrations exist and are applied against `db.sqlite3` (gitignored).
 `ring.sql` (gitignored, ~986MB mysqldump) is the dev seed source used by the
@@ -72,6 +72,15 @@ exclusively in SQLite. NOTE: `.venv` currently mixes 3.12 (app) and 3.14 (pip)
     `context_processors.py` (`user_can_manage`, `pdb_enabled`), URLs under
     `/accounts/{login,logout,signup,signups,peeringdb/*}`. Models, migrations,
     templates and tests all cover these.
+  - Role split: `user_can_manage` (ring admins) get the full dashboards:
+    `index` (`/`), `machines`, `participants`, `users`, `participant_info` —
+    these are `@admin_or_portal` (regular members get redirected to `/my/`).
+    Regular linked members land on `my_portal` (`/my/`, `ring-my`: own
+    company, account, PeeringDB binding and their own nodes + issues) and may
+    view `machine_detail`/`machine_status` and edit their own participant
+    only. Never leak other organisations' names/emails to members; the issue
+    scanner helper `_scoped_issues(queryset, since)` + `_issue_summary()`
+    keep member issue views scoped to their own nodes.
   - `services/` — `geocoding.py` (pycountry/nominatim, lru_cache), `nodestatus.py`
     (port of `ansible_process`), `ansiblefiles.py` (hostfile/hostkeyfile/userfile
     generators), `deploy.py` (git/rsync for ring-ansible + ring-web),

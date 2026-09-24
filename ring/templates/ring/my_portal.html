@@ -1,0 +1,120 @@
+{% extends "ring/base.html" %}
+{% load ring_filters %}
+{% block title %}NLNOG RING — My RING{% endblock %}
+{% block content %}
+<h1>My RING</h1>
+
+<div class="kpis">
+  <a class="kpi" href="#nodes"><div class="num">{{ machine_count }}</div><div class="lbl">Nodes</div></a>
+  <a class="kpi" href="#nodes"><div class="num" style="color:var(--ok)">{{ active_count }}</div><div class="lbl">Active nodes</div></a>
+  <a class="kpi" href="#issues"><div class="num" style="color:var(--bad)">{{ issue_rows|length }}</div><div class="lbl">Nodes with issues</div></a>
+  <a class="kpi" href="#issues"><div class="num" style="color:var(--warn)">{{ need_reboot }}</div><div class="lbl">Need reboot</div></a>
+  <a class="kpi" href="#issues"><div class="num" style="color:var(--warn)">{{ updates_pending }}</div><div class="lbl">Updates pending</div></a>
+</div>
+
+<div class="grid">
+  <section>
+    <h2>Organisation</h2>
+    {% if participant %}
+    <table>
+      <tbody>
+        <tr><th>Company</th><td>{{ participant.company }}</td></tr>
+        <tr><th>ASN</th><td>{% if autnum %}AS{{ autnum }}{% else %}<span class="muted">unset</span>{% endif %}</td></tr>
+        <tr><th>Contact</th><td>{{ participant.contact|default:"—" }}</td></tr>
+        <tr><th>Email</th><td>{{ participant.email|default:"—" }}</td></tr>
+        <tr><th>NOC email</th><td>{{ participant.nocemail|default:"—" }}</td></tr>
+        <tr><th>URL</th><td>{% if participant.url %}<a href="{{ participant.url }}">{{ participant.url }}</a>{% else %}—{% endif %}</td></tr>
+        <tr><th>Description</th><td>{{ participant.companydesc|default:"—" }}</td></tr>
+        <tr><th>Public</th><td>{% if participant.public %}<span class="badge ok">public</span>{% else %}<span class="badge muted">private</span>{% endif %}</td></tr>
+      </tbody>
+    </table>
+    <p><a class="btn btn-outline" href="{% url 'ring-participant-edit' participant.pk %}">Edit organisation info</a></p>
+    {% else %}
+    <p class="muted">Your account is not linked to a RING participant.</p>
+    {% endif %}
+  </section>
+
+  <section>
+    <h2>Account</h2>
+    <table>
+      <tbody>
+        <tr><th>Username</th><td>{{ request.user.username }}</td></tr>
+        <tr><th>Email</th><td>{{ request.user.email|default:"—" }}</td></tr>
+        <tr><th>Ring user</th><td>{{ ru.username|default:"—" }}</td></tr>
+        <tr><th>Role</th><td>{% if ru.admin %}<span class="badge ok">admin</span>{% else %}<span class="badge muted">member</span>{% endif %}</td></tr>
+        <tr><th>PeeringDB id</th><td>{{ pdb_id|default:"—" }}</td></tr>
+        {% if pdb_net_id %}<tr><th>PeeringDB network</th><td>{{ pdb_net_id }}</td></tr>{% endif %}
+      </tbody>
+    </table>
+  </section>
+</div>
+
+<h2 id="nodes">My nodes <span class="badge muted">{{ machine_count }}</span></h2>
+{% if machines %}
+<table class="mono">
+  <thead>
+    <tr>
+      <th>Hostname</th><th>Country</th><th>City</th><th>Datacenter</th>
+      <th>Status</th><th>IPv4</th><th>IPv6</th><th>Last active</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for m in machines %}
+    <tr>
+      <td><a href="{% url 'ring-machine-detail' m.hostname %}">{{ m.short_hostname }}</a></td>
+      <td>{{ m.country|flag }} {{ m.country|default:"—" }}</td>
+      <td>{{ m.city|default:"—" }}</td>
+      <td>{{ m.dc|default:"—" }}</td>
+      <td class="nowrap">
+        {% if m.active %}<span class="badge ok">active</span>{% else %}<span class="badge bad">inactive</span>{% endif %}
+      </td>
+      <td>{% if m.active and m.alive_v4 %}<span class="badge ok">up</span>{% elif m.active %}<span class="badge warn">down</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+      <td>{% if m.active and m.alive_v6 %}<span class="badge ok">up</span>{% elif m.active %}<span class="badge warn">down</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+      <td class="muted">{{ m.last_active|date:"Y-m-d"|default:"—" }}</td>
+    </tr>
+    {% empty %}
+    <tr><td colspan="8" class="muted">No nodes.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted">Your organisation has no nodes in the RING.</p>
+{% endif %}
+
+<h2 id="issues">Issues on my nodes <span class="badge muted">{{ issue_rows|length }}</span></h2>
+<p class="table-filter">
+  <a href="?issues=all"{% if issue_type == "all" %} class="on"{% endif %}>all ({{ issue_rows|length }})</a>
+  <a href="?issues=connectivity"{% if issue_type == "connectivity" %} class="on"{% endif %}>connectivity ({{ type_counts.connectivity }})</a>
+  <a href="?issues=updates"{% if issue_type == "updates" %} class="on"{% endif %}>updates ({{ type_counts.updates }})</a>
+  <a href="?issues=reboot"{% if issue_type == "reboot" %} class="on"{% endif %}>reboot ({{ type_counts.reboot }})</a>
+  <a href="?issues=ansible_failed"{% if issue_type == "ansible_failed" %} class="on"{% endif %}>ansible failed ({{ type_counts.ansible_failed }})</a>
+  <a href="?issues=inactive"{% if issue_type == "inactive" %} class="on"{% endif %}>inactive ({{ type_counts.inactive }})</a>
+</p>
+{% if issue_rows %}
+<div class="scroll-table">
+<table class="mono">
+  <thead><tr>
+    <th>Host</th><th>Status</th><th>Reboot</th><th class="num">Updates</th><th class="num">Sec</th>
+    <th>IPv4</th><th>IPv6</th><th class="num">Failed</th><th>Last active</th>
+  </tr></thead>
+  <tbody>
+  {% for c in issue_rows %}
+    <tr>
+      <td><a href="{% url 'ring-machine-detail' c.fqdn %}">{{ c.short }}</a></td>
+      <td>{% if c.m.active %}<span class="badge ok">active</span>{% else %}<span class="badge bad">inactive</span>{% endif %}</td>
+      <td>{% if c.needs_reboot %}<span class="text-bad">yes</span>{% else %}<span class="muted">no</span>{% endif %}</td>
+      <td class="num">{% if c.updates %}<span class="text-bad">{{ c.updates }}</span>{% else %}0{% endif %}</td>
+      <td class="num">{% if c.security_updates %}<span class="text-bad">{{ c.security_updates }}</span>{% else %}0{% endif %}</td>
+      <td>{% if c.m.alive_v4 %}<span class="badge ok">up</span>{% else %}<span class="badge bad">down</span>{% endif %}</td>
+      <td>{% if c.m.alive_v6 %}<span class="badge ok">up</span>{% else %}<span class="badge bad">down</span>{% endif %}</td>
+      <td class="num">{% if c.failures %}<span class="text-bad">{{ c.failures }}</span>{% else %}0{% endif %}</td>
+      <td class="muted">{{ c.m.last_active|date:"Y-m-d"|default:"—" }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p class="muted">No issues on your nodes.</p>
+{% endif %}
+{% endblock %}

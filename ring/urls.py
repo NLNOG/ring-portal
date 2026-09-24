@@ -5,6 +5,7 @@ from ring import views
 
 urlpatterns = [
     path("", views.index, name="ring-index"),
+    path("my/", views.my_portal, name="ring-my"),
     path("machines/", views.machines, name="ring-machines"),
     path("machines/<str:hostname>/", views.machine_detail, name="ring-machine-detail"),
     path(

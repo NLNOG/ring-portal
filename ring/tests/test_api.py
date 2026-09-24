@@ -1,3 +1,4 @@
+from io import StringIO
 from unittest import mock
 
 from django.contrib.auth.models import User
@@ -522,16 +523,17 @@ class ParticipantEditTest(TestCase):
         self.assertEqual(r.status_code, 302)
 
     def test_edit_list_visibility(self):
-        as_owner = self.me.get("/participants/")
+        as_owner = self.me.get("/my/")
         self.assertIn("Edit Corp", as_owner.content.decode())
         self.assertIn(self.edit_url(), as_owner.content.decode())
-        as_other = self.other.get("/participants/")
-        # other user's own org row shows its edit link
+        as_other = self.other.get("/my/")
+        # other user sees only their own org on the portal
         self.assertIn(
             "/participants/%d/edit/" % self.other_org.pk,
             as_other.content.decode(),
         )
         self.assertNotIn(self.edit_url(), as_other.content.decode())
+        self.assertNotIn("Edit Corp", as_other.content.decode())
 
     def test_admin_can_rename_company(self):
         from django.contrib.auth import get_user_model
@@ -559,6 +561,73 @@ class ParticipantEditTest(TestCase):
         self.assertIn(self.edit_url(), page)
 
 
+class MemberPortalTest(TestCase):
+    """Regular members only see their own organisation's data."""
+
+    def setUp(self):
+        from django.core.cache import cache
+
+        cache.clear()
+        self.member, self.org, self.ru = make_org_user("member1", "My Org")
+        self.other, self.other_org, self.other_ru = make_org_user(
+            "other1", "Secret Corp"
+        )
+        self.my_machine = Machine.objects.create(
+            hostname="mine.ring.nlnog.net", owner=self.ru, autnum=1, active=1
+        )
+        self.their_machine = Machine.objects.create(
+            hostname="theirs.ring.nlnog.net", owner=self.other_ru, autnum=2, active=1
+        )
+        self.client = Client()
+        self.assertTrue(self.client.login(username="member1", password="pw"))
+
+    def test_index_redirects_member_to_portal(self):
+        r = self.client.get("/")
+        self.assertEqual(r.status_code, 302)
+        self.assertEqual(r.url, "/my/")
+
+    def test_portal_shows_own_company_account_nodes(self):
+        r = self.client.get("/my/")
+        self.assertEqual(r.status_code, 200)
+        content = r.content.decode()
+        self.assertIn("My Org", content)
+        self.assertIn("mine.ring.nlnog.net", content)
+        self.assertIn("member1", content)
+        self.assertNotIn("Secret Corp", content)
+        self.assertNotIn("theirs.ring.nlnog.net", content)
+
+    def test_member_redirected_away_from_org_pages(self):
+        for url in ("/machines/", "/participants/", "/users/"):
+            r = self.client.get(url)
+            self.assertEqual(r.status_code, 302, url)
+            self.assertEqual(r.url, "/my/", url)
+
+    def test_machine_detail_own_only(self):
+        own = self.client.get("/machines/%s/" % self.my_machine.hostname)
+        self.assertEqual(own.status_code, 200)
+        other = self.client.get("/machines/%s/" % self.their_machine.hostname)
+        self.assertEqual(other.status_code, 302)
+        self.assertEqual(other.url, "/my/")
+
+    def test_portal_issues_scoped_to_own_nodes(self):
+        HealthReport.objects.create(
+            hostname="mine",
+            family=4,
+            summary={"info": {"needs_reboot": True}, "health": {}},
+        )
+        HealthReport.objects.create(
+            hostname="theirs",
+            family=4,
+            summary={"info": {"needs_reboot": True}, "health": {}},
+        )
+        r = self.client.get("/my/")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.context["need_reboot"], 1)
+        content = r.content.decode()
+        self.assertIn("mine.ring.nlnog.net", content)
+        self.assertNotIn("theirs.ring.nlnog.net", content)
+
+
 class HealthAlertViewsTest(TestCase):
     def setUp(self):
         from django.core.cache import cache
@@ -569,7 +638,9 @@ class HealthAlertViewsTest(TestCase):
             hostname="alert01.ring.nlnog.net", owner=self.owner, autnum=123, active=1
         )
         self.client = Client()
-        User.objects.create_user(username="viewer", password="pw")
+        viewer = User.objects.create_user(username="viewer", password="pw")
+        viewer.is_staff = True
+        viewer.save()
         self.assertTrue(self.client.login(username="viewer", password="pw"))
 
     def test_machine_detail_shows_buttons_and_counts(self):
@@ -1019,3 +1090,24 @@ class BackfillAsnTest(TestCase):
         )
         call_command("ring_backfill_asn", verbosity=0)
         self.assertEqual(participant_autnum(owner.participant.pk), 555)
+
+    def test_shared_asn_reported_not_crashed(self):
+        from django.core.management import call_command
+
+        owner_a = make_owner("bf4a")
+        owner_b = make_owner("bf4b")
+        Machine.objects.create(
+            hostname="a.ring.nlnog.net", owner=owner_a, autnum=999, active=1
+        )
+        Machine.objects.create(
+            hostname="b.ring.nlnog.net", owner=owner_b, autnum=999, active=1
+        )
+        out = StringIO()
+        call_command("ring_backfill_asn", stdout=out)
+        owner_ids = [owner_a.participant.pk, owner_b.participant.pk]
+        assigned = [
+            participant_autnum(pk) for pk in owner_ids
+        ]
+        self.assertEqual(assigned.count(999), 1)
+        self.assertEqual(assigned.count(None), 1)
+        self.assertIn("already assigned to another participant", out.getvalue())
