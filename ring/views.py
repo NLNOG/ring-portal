@@ -12,6 +12,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth import login as auth_login
 from django.contrib.auth.decorators import login_required, user_passes_test
 from django.contrib import messages
+from django.db import IntegrityError
 from django.db.models import Count, Q
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
@@ -41,7 +42,7 @@ from ring.services.peeringdb import (
 )
 from ring.services.profiles import (
     link_ring_user,
-    participant_for_autnum,
+    participant_for_pdb,
     ring_user,
     ring_user_for_pdb,
     set_participant_autnum,
@@ -740,9 +741,10 @@ def _pdb_provision(request, profile, net):
         return ("user", user)
 
     asn = int(net["asn"])
-    participant = participant_for_autnum(asn)
+    participant = participant_for_pdb(asn)
     if participant is None:
         return ("pending", _pdb_create_signup(profile, net))
+    set_participant_autnum(participant.pk, asn)
 
     user = User.objects.create_user(
         username=_pdb_username(profile),
@@ -888,14 +890,21 @@ def approve_peeringdb_signup(request, pk):
     signup = get_object_or_404(PeeringDBSignup, pk=pk)
     if not signup.approved:
         user = signup.django_user
-        participant = participant_for_autnum(signup.asn)
+        participant = participant_for_pdb(signup.asn, signup.net_name)
         if participant is None:
-            participant = Participant.objects.create(
-                company=signup.net_name or "AS%s" % signup.asn,
-                contact=signup.net_name or "",
-                email=user.email or "",
-            )
-            set_participant_autnum(participant.pk, signup.asn)
+            try:
+                participant = Participant.objects.create(
+                    company=signup.net_name or "AS%s" % signup.asn,
+                    contact=signup.net_name or "",
+                    email=user.email or "",
+                )
+            except IntegrityError:
+                participant = Participant.objects.filter(
+                    company__iexact=(signup.net_name or "").strip()
+                ).first()
+                if participant is None:
+                    raise
+        set_participant_autnum(participant.pk, signup.asn)
         ring_user_obj = RingUser.objects.create(
             username=user.username,
             participant=participant,

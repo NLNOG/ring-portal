@@ -28,6 +28,7 @@
   <div class="kpi"><div class="num ip muted">{{ machine.v6|default:"—" }}</div><div class="lbl">IPv6</div></div>
   <div class="kpi"><div class="num"><a href="https://www.peeringdb.com/asn/{{ machine.autnum }}" target="_blank" rel="noopener">{{ machine.autnum }}</a></div><div class="lbl">ASN</div></div>
   <div class="kpi"><div class="num">{{ flag }} {{ machine.country|default:"—" }}{% if machine.state %}-{{ machine.state }}{% endif %}</div><div class="lbl">Location</div></div>
+  <div class="kpi"><div class="num">{{ latest_health.info.ubuntu_release|default:"—" }}</div><div class="lbl">Ubuntu</div></div>
 </div>
 
 <div class="grid">

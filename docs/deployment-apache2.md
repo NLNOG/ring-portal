@@ -15,15 +15,16 @@ startup:
 
 | Var | Purpose |
 |---|---|
-| `SECRET_KEY` | Session/CSRF signing. **A real, random value in production** (the committed default is `django-insecure-...`). |
-| `ALLOWED_HOSTS` | Comma-separated hostnames accepted on `Host:` (currently `[]`). |
-| `DEBUG` | Must be `False` in production. |
-| `DB_NAME`/`DB_USER`/`DB_PASSWORD`/`DB_HOST`/`DB_PORT` | Optional read-only `legacy` MySQL (production ring data). `RING_LEGACY_DB = 1` is already in the settings, so the alias is active whenever these are set. |
+| `SECRET_KEY` | Session/CSRF signing. Env-driven (falls back to an insecure dev default). **Set a real random value in production.** |
+| `ALLOWED_HOSTS` | Comma-separated hostnames accepted on `Host:`. Falls back to `[]` (dev-local hosts only). |
+| `DEBUG` | `True`/`False`. Defaults to `False`. |
+| `DB_NAME`/`DB_USER`/`DB_PASSWORD`/`DB_HOST`/`DB_PORT` | Optional read-only `legacy` MySQL (production ring data). `RING_LEGACY_DB = 1` is already in the settings, so the alias is active whenever the DB is reachable. |
 | `PDB_CLIENT_ID`/`PDB_CLIENT_SECRET`/`PDB_REDIRECT_URL` | PeeringDB OAuth (see `docs/peeringdb-oauth.md`). |
 | `RING_*` | Filesystem paths for the `/var/ring` management commands (below). |
 
-These are **not** hardcoded in the settings file, so point the WSGI daemon or a
-`/etc/ring/ring.env`-style environment file at them.
+These are read from the process env at startup, so point the WSGI daemon or an
+`/etc/ring/ring.env`-style environment file at them — do not hardcode them in a
+committed settings file.
 
 ## 2. Virtualenv
 
@@ -31,39 +32,46 @@ Use one consistent Python (3.12 — the same as the app). The local `.venv` mixe
 3.12 (app) and 3.14 (pip); a production venv must not. On the server:
 
 ```sh
-python3.12 -m venv /srv/ring/.venv
-/srv/ring/.venv/bin/pip install mod_wsgi django djangorestframework pymysql
+python3.12 -m venv /var/www/portal.ring.nlnog.net/venv
+/var/www/portal.ring.nlnog.net/venv/bin/pip install django djangorestframework pymysql
 ```
 
 Install `mod_wsgi` **inside** the venv so Apache loads the compiled module for
 the same Python the app runs under:
 
 ```sh
-/srv/ring/.venv/bin/mod_wsgi-express module-config
-# -> LoadModule wsgi_module "/srv/ring/.venv/lib/python3.12/site-packages/mod_wsgi/server/mod_wsgi-py312.cpython-312-darwin.so"   (path varies)
+/var/www/portal.ring.nlnog.net/venv/bin/mod_wsgi-express module-config
+# -> LoadModule wsgi_module "/var/www/portal.ring.nlnog.net/venv/lib/python3.12/site-packages/mod_wsgi/server/mod_wsgi-*.so"   (path varies)
 ```
 
-## 3. Settings
+`python-home=/var/www/portal.ring.nlnog.net/venv` on `WSGIDaemonProcess` makes
+the daemon use that venv's Python; a distro-packaged `libapache2-mod-wsgi`
+only works if it was built for the **same** Python version as the venv.
 
-Copy the example as your working config and adjust for production:
+## 3. Deployed tree — gitignored files included
+
+Copying the git repo alone is not enough: `ringweb/settings.py` and
+`db.sqlite3` are gitignored and must be supplied on the server:
 
 ```sh
-cp ringweb/settings.py.example ringweb/settings.py
-# set: SECRET_KEY (env), ALLOWED_HOSTS, DEBUG=False
-# keep: DATABASES (SQLite default + optional legacy alias)
+cp ringweb/settings.py.example ringweb/settings.py   # then edit for production
+#   DEBUG=False (default), ALLOWED_HOSTS=["portal.ring.nlnog.net"],
+#   SECRET_KEY=<real random value>  — or set these as env on the WSGI daemon.
+#   Legacy MySQL: set DB_HOST/DB_NAME/DB_USER/DB_PASSWORD, or point at
+#   127.0.0.1:3306 if ring runs on this box.
 ```
 
-Decide where the SQLite file lives. By default it is `BASE_DIR/db.sqlite3`
-(WAL mode). It must be writable by the WSGI worker user (`www-data` unless you
-run a dedicated user) — or move it somewhere like `/srv/ring/var/db.sqlite3`
-and adjust `DATABASES["default"]["NAME"]` in your local settings. A MySQL
-`default` (instead of SQLite) is also viable and scales better.
-
-Static files: `STATIC_ROOT` is defined (`BASE_DIR/staticfiles`). Collect once
-after each deploy, then serve from Apache:
+- The WSGI entrypoint is the project's own `ringweb/wsgi.py` (no separate
+  `portal.wsgi` needed — `python-path` on the daemon makes `ringweb` importable).
+- `db.sqlite3` (auth users, signups, PeeringDB identities) must exist in the
+  deployment root, be readable/writable by the WSGI user, and be migrated:
+  `python manage.py migrate`. Ship an existing one or create a fresh one +
+  superuser.
+- Static files: `STATIC_ROOT` is defined (`BASE_DIR/staticfiles`). Collect once
+  after each deploy, then serve from Apache:
 
 ```sh
-/srv/ring/.venv/bin/python manage.py collectstatic --noinput
+/var/www/portal.ring.nlnog.net/venv/bin/python manage.py collectstatic --noinput
 ```
 
 (The app's own templates are inline-styled and Chart.js comes from a CDN, so
@@ -72,30 +80,32 @@ the only real static payload is Django admin's assets.)
 ## 4. Apache vhost
 
 ```apache
-LoadModule wsgi_module "/srv/ring/.venv/lib/python3.12/.../mod_wsgi.so"   # from module-config
+LoadModule wsgi_module "/var/www/portal.ring.nlnog.net/venv/lib/python3.12/.../mod_wsgi.so"   # from module-config
 
-WSGIDaemonProcess ring \
-    python-home=/srv/ring/.venv \
-    python-path=/srv/ring \
+WSGIDaemonProcess ring_portal \
+    python-home=/var/www/portal.ring.nlnog.net/venv \
+    python-path=/var/www/portal.ring.nlnog.net \
     user=ringapp group=ringapp \
     processes=2 threads=8 \
     env=DJANGO_SETTINGS_MODULE=ringweb.settings \
     env=SECRET_KEY=... \
-    env=ALLOWED_HOSTS=ring.example.net \
+    env=ALLOWED_HOSTS=portal.ring.nlnog.net \
     env=DEBUG=False \
     env=DB_NAME=ring env=DB_USER=ring_ro env=DB_PASSWORD=... \
     env=DB_HOST=db01.example.net env=DB_PORT=3306 \
     env=PDB_CLIENT_ID=... env=PDB_CLIENT_SECRET=... \
-    env=PDB_REDIRECT_URL=https://ring.example.net/accounts/peeringdb/callback/
+    env=PDB_REDIRECT_URL=https://portal.ring.nlnog.net/accounts/peeringdb/callback/
 
-WSGIScriptAlias / /srv/ring/ringweb/wsgi.py process-group=ring application-group=%{GLOBAL}
+WSGIScriptAlias / /var/www/portal.ring.nlnog.net/ringweb/wsgi.py process-group=ring_portal application-group=%{GLOBAL}
 
-<Directory /srv/ring/ringweb>
+# Apache 2.4 syntax — the older `Order deny,allow` / `Allow from all` lines are
+# Apache 2.2 and will be rejected by `apachectl configtest` on 2.4.
+<Directory /var/www/portal.ring.nlnog.net>
     Require all granted
 </Directory>
 
-Alias /static/ /srv/ring/staticfiles/
-<Directory /srv/ring/staticfiles>
+Alias /static/ /var/www/portal.ring.nlnog.net/staticfiles/
+<Directory /var/www/portal.ring.nlnog.net/staticfiles>
     Require all granted
 </Directory>
 
@@ -111,6 +121,10 @@ Notes:
 - `WSGIScriptAlias` to `ringweb/wsgi.py` only works if the venv/Python and the
   WSGI daemon share the module layout — keep `python-path=/srv/ring` so
   `ringweb` is importable.
+- `python-path` is **required**: mod_wsgi only adds the WSGI script's own
+  directory to `sys.path`, so a script inside `ringweb/` cannot import the
+  `ringweb` package unless the project root is added here — keep it pointing at
+  the deployment root.
 - `application-group=%{GLOBAL}` couples the process-group to Apache's global
   interpreter; remove it if you run multiple apps and need isolation.
 - A **SELECT-only** MySQL account is a hard requirement for the `legacy` alias —
@@ -123,17 +137,17 @@ management commands must run on a schedule (all need the same `DB_*` env):
 
 ```sh
 # every 5 minutes — process ansible/health status, optionally mail on failures
-*/5 * * * *   /srv/ring/.venv/bin/python /srv/ring/manage.py ring_process_status --send
+*/5 * * * *   /var/www/portal.ring.nlnog.net/venv/bin/python /var/www/portal.ring.nlnog.net/manage.py ring_process_status --send
 
 # hourly — purge dead machines
-0 * * * *     /srv/ring/.venv/bin/python /srv/ring/manage.py ring_purge_machines
+0 * * * *     /var/www/portal.ring.nlnog.net/venv/bin/python /var/www/portal.ring.nlnog.net/manage.py ring_purge_machines
 
 # daily — scan hostkeys, regenerate ansible/web files, mail, DNS commands
-15 3 * * *    /srv/ring/.venv/bin/python /srv/ring/manage.py ring_scan_hostkeys
-30 3 * * *    /srv/ring/.venv/bin/python /srv/ring/manage.py ring_ansible_deploy
-45 3 * * *    /srv/ring/.venv/bin/python /srv/ring/manage.py ring_generate_webpost --publish
-0  4 * * *    /srv/ring/.venv/bin/python /srv/ring/manage.py ring_generate_mail
-15 4 * * *    /srv/ring/.venv/bin/python /srv/ring/manage.py ring_dnscommands
+15 3 * * *    /var/www/portal.ring.nlnog.net/venv/bin/python /var/www/portal.ring.nlnog.net/manage.py ring_scan_hostkeys
+30 3 * * *    /var/www/portal.ring.nlnog.net/venv/bin/python /var/www/portal.ring.nlnog.net/manage.py ring_ansible_deploy
+45 3 * * *    /var/www/portal.ring.nlnog.net/venv/bin/python /var/www/portal.ring.nlnog.net/manage.py ring_generate_webpost --publish
+0  4 * * *    /var/www/portal.ring.nlnog.net/venv/bin/python /var/www/portal.ring.nlnog.net/manage.py ring_generate_mail
+15 4 * * *    /var/www/portal.ring.nlnog.net/venv/bin/python /var/www/portal.ring.nlnog.net/manage.py ring_dnscommands
 ```
 
 - `ring_ansible_deploy`, `ring_generate_webpost --publish`,

@@ -11,6 +11,7 @@ from ring.services.profiles import (
     link_ring_user,
     participant_autnum,
     participant_for_autnum,
+    participant_for_pdb,
     profile_for_ring_user,
     ring_user,
     ring_user_for_pdb,
@@ -79,6 +80,23 @@ class ProfileHelpersTest(TestCase):
         self.assertEqual(participant_autnum(p.pk), 2914)
         self.assertEqual(participant_for_autnum(2914).pk, p.pk)
         self.assertIsNone(participant_for_autnum(999))
+
+    def test_participant_for_pdb_falls_back_to_machine_asn(self):
+        p, ru, _ = make_pair()
+        self.assertIsNone(participant_for_pdb(2914))
+        Machine.objects.create(
+            hostname="pdb-asn.ring.nlnog.net", owner=ru, autnum=2914
+        )
+        self.assertEqual(participant_for_pdb(2914).pk, p.pk)
+        self.assertIsNone(participant_for_pdb(999))
+
+    def test_participant_for_pdb_company_lookup_is_opt_in(self):
+        p, _, _ = make_pair()
+        self.assertEqual(
+            participant_for_pdb(999, "PROFILEUSER-co").pk, p.pk
+        )
+        self.assertIsNone(participant_for_pdb(999))
+        self.assertIsNone(participant_for_pdb(999, "No Such Co"))
 
 
 class ProfilesReadonlyGuardTest(TestCase):

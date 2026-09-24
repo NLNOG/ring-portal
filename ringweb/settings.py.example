@@ -22,12 +22,16 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = "django-insecure-x3=^w3)_*h9#jtc6d9yqtdf$5otxlo3x7*)y69pc7s5c(vc+$y"
+SECRET_KEY = os.environ.get(
+    "SECRET_KEY", "django-insecure-x3=^w3)_*h9#jtc6d9yqtdf$5otxlo3x7*)y69pc7s5c(vc+$y"
+)
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = os.environ.get("DEBUG", "False") == "True"
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = [
+    h.strip() for h in os.environ.get("ALLOWED_HOSTS", "").split(",") if h.strip()
+]
 
 LOGIN_URL = "/accounts/login/"
 LOGIN_REDIRECT_URL = "/"
@@ -78,12 +82,16 @@ RING_WEB_LOGODIR = RING_WEBDIR + "/content/images/ring-logos"
 RING_GEOCODE_URL = "https://nominatim.openstreetmap.org/reverse?format=json&addressdetails=1&"
 RING_LEGACY_DB = 1
 
-# PeeringDB OAuth (login via PeeringDB accounts). Login button shows only when
-# the client id is configured. Override in production.
+# PeeringDB OAuth (login via PeeringDB accounts). Set these in a local
+# settings.py (replace the placeholders below), or override them with the
+# PDB_* env vars — env wins. The login button only renders when a client id
+# (and redirect URL) is configured. See docs/peeringdb-oauth.md.
 PDB_ENDPOINT = os.environ.get("PDB_ENDPOINT", "https://auth.peeringdb.com/")
-PDB_CLIENT_ID = os.environ.get("PDB_CLIENT_ID", "")
-PDB_CLIENT_SECRET = os.environ.get("PDB_CLIENT_SECRET", "")
-PDB_REDIRECT_URL = os.environ.get("PDB_REDIRECT_URL", "")
+PDB_CLIENT_ID = os.environ.get("PDB_CLIENT_ID", "YOUR_PEERINGDB_CLIENT_ID")
+PDB_CLIENT_SECRET = os.environ.get("PDB_CLIENT_SECRET", "YOUR_PEERINGDB_CLIENT_SECRET")
+PDB_REDIRECT_URL = os.environ.get(
+    "PDB_REDIRECT_URL", "https://portal.ring.nlnog.net/accounts/peeringdb/callback/"
+)
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",

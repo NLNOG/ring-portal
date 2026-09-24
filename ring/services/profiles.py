@@ -12,6 +12,7 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 
 from ring.models import (
+    Machine,
     Participant,
     ParticipantProfile,
     RingUser,
@@ -126,3 +127,31 @@ def set_participant_autnum(participant_or_id, asn):
     profile.autnum = asn
     profile.save()
     return profile
+
+
+def participant_for_pdb(asn, net_name=None):
+    """Nearest Participant for a PeeringDB network, or None.
+
+    Resolution order:
+    1. the recorded ASN identity (``ParticipantProfile.autnum``, set by
+       ``ring_backfill_asn`` or on first match);
+    2. a machine whose ``autnum`` equals the ASN (pre-backfill legacy data);
+    3. the PeeringDB network name against ``participants.company`` — only when
+       ``net_name`` is given, so callers can opt out on trust-sensitive paths
+       (auto-login stays ASN-grounded; admin approval may use the name).
+    """
+    participant = participant_for_autnum(asn)
+    if participant is None:
+        pid = (
+            Machine.objects.filter(autnum=asn)
+            .values_list("owner__participant_id", flat=True)
+            .distinct()
+            .first()
+        )
+        if pid is not None:
+            participant = Participant.objects.filter(pk=pid).first()
+    if participant is None and net_name:
+        participant = Participant.objects.filter(
+            company__iexact=net_name.strip()
+        ).first()
+    return participant

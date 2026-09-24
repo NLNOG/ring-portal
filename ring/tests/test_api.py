@@ -889,6 +889,61 @@ class PeeringDBOAuthTest(TestCase):
         self.assertEqual(r.status_code, 302)
         self.assertEqual(PeeringDBSignup.objects.filter(pk=signup2.pk).count(), 0)
 
+    @override_settings(**PDB_SETTINGS)
+    def test_login_matches_machine_asn_without_backfill(self):
+        existing = Participant.objects.create(company="Bitterballen")
+        owner = RingUser.objects.create(
+            username="bb-owner", participant=existing, active=1
+        )
+        Machine.objects.create(
+            hostname="bb.ring.nlnog.net", owner=owner, autnum=2914, active=1
+        )
+        _, state = self._start_login()
+        with mock.patch(
+            "ring.views.exchange_code", return_value="tok"
+        ), mock.patch("ring.views.fetch_profile", return_value=PDB_PROFILE):
+            r = self.client.get(
+                "/accounts/peeringdb/callback/?code=abc&state=%s" % state
+            )
+        self.assertEqual(r.status_code, 302)
+        self.assertIn("_auth_user_id", self.client.session)
+        self.assertEqual(PeeringDBSignup.objects.count(), 0)
+        ring_user, _ = ring_user_for_pdb(9001)
+        self.assertEqual(ring_user.participant, existing)
+        self.assertEqual(participant_autnum(existing.pk), 2914)
+
+    @override_settings(**PDB_SETTINGS)
+    def test_approve_links_existing_participant_by_company(self):
+        make_owner("pdb-admin")
+        User.objects.create_superuser("pdb_admin", "a@x", "pw")
+        existing = Participant.objects.create(company="Bitterbal")
+        signup_user = User.objects.create_user(
+            username="pending-bb", email="p@x"
+        )
+        signup_user.is_active = False
+        signup_user.save()
+        signup = PeeringDBSignup.objects.create(
+            django_user=signup_user,
+            peeringdb_id=9102,
+            peeringdb_net_id=99,
+            asn=200995,
+            net_name="BITTERBAL",
+        )
+        self.client.login(username="pdb_admin", password="pw")
+        r = self.client.post(
+            "/accounts/signups/peeringdb/%d/approve/" % signup.pk
+        )
+        self.assertEqual(r.status_code, 302)
+        signup.refresh_from_db()
+        self.assertTrue(signup.approved)
+        self.assertEqual(
+            Participant.objects.filter(company="Bitterbal").count(), 1
+        )
+        ring_user, profile = ring_user_for_pdb(9102)
+        self.assertEqual(ring_user.participant, existing)
+        self.assertTrue(profile.django_user.is_active)
+        self.assertEqual(participant_autnum(existing.pk), 200995)
+
     def _make_pending_signup(self, admin, salt):
         user = User.objects.create_user(
             username="pending%d-%d" % (admin.pk, salt), email="p@x"
