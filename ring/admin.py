@@ -15,11 +15,25 @@ from .models import (
     SSHHostKey,
     SSHKey,
 )
-from ring.services.profiles import participant_autnum, profile_for_ring_user
+from ring.services.profiles import legacy_writable, participant_autnum, profile_for_ring_user
+
+
+class LegacyReadonlyAdminMixin:
+    """Disable add/change/delete for legacy-backed models when the ring
+    database is read-only, so the Django admin can't write old ring tables."""
+
+    def has_add_permission(self, request):
+        return legacy_writable() and super().has_add_permission(request)
+
+    def has_change_permission(self, request, obj=None):
+        return legacy_writable() and super().has_change_permission(request)
+
+    def has_delete_permission(self, request, obj=None):
+        return legacy_writable() and super().has_delete_permission(request)
 
 
 @admin.register(Participant)
-class ParticipantAdmin(admin.ModelAdmin):
+class ParticipantAdmin(LegacyReadonlyAdminMixin, admin.ModelAdmin):
     list_display = ["id", "company", "autnum", "url", "contact", "email", "nocemail", "public"]
     search_fields = ["company", "contact", "email"]
 
@@ -29,7 +43,7 @@ class ParticipantAdmin(admin.ModelAdmin):
 
 
 @admin.register(RingUser)
-class RingUserAdmin(admin.ModelAdmin):
+class RingUserAdmin(LegacyReadonlyAdminMixin, admin.ModelAdmin):
     list_display = [
         "id",
         "username",
@@ -86,7 +100,7 @@ class PeeringDBSignupAdmin(admin.ModelAdmin):
 
 
 @admin.register(Machine)
-class MachineAdmin(admin.ModelAdmin):
+class MachineAdmin(LegacyReadonlyAdminMixin, admin.ModelAdmin):
     list_display = [
         "id",
         "hostname",
@@ -103,35 +117,35 @@ class MachineAdmin(admin.ModelAdmin):
 
 
 @admin.register(SSHKey)
-class SSHKeyAdmin(admin.ModelAdmin):
+class SSHKeyAdmin(LegacyReadonlyAdminMixin, admin.ModelAdmin):
     list_display = ["id", "keytype", "keyid", "user"]
     search_fields = ["keyid"]
 
 
 @admin.register(SSHHostKey)
-class SSHHostKeyAdmin(admin.ModelAdmin):
+class SSHHostKeyAdmin(LegacyReadonlyAdminMixin, admin.ModelAdmin):
     list_display = ["id", "keytype", "keyid", "machine"]
     search_fields = ["keyid", "machine__hostname"]
 
 
 @admin.register(ParticipantRemark)
-class ParticipantRemarkAdmin(admin.ModelAdmin):
+class ParticipantRemarkAdmin(LegacyReadonlyAdminMixin, admin.ModelAdmin):
     list_display = ["id", "participant", "tstamp"]
 
 
 @admin.register(MachineRemark)
-class MachineRemarkAdmin(admin.ModelAdmin):
+class MachineRemarkAdmin(LegacyReadonlyAdminMixin, admin.ModelAdmin):
     list_display = ["id", "machine", "tstamp"]
 
 
 @admin.register(AnsibleRun)
-class AnsibleRunAdmin(admin.ModelAdmin):
+class AnsibleRunAdmin(LegacyReadonlyAdminMixin, admin.ModelAdmin):
     list_display = ["id", "hostname", "timestamp", "unreachable", "failures", "ok"]
     search_fields = ["hostname"]
 
 
 @admin.register(HealthReport)
-class HealthReportAdmin(admin.ModelAdmin):
+class HealthReportAdmin(LegacyReadonlyAdminMixin, admin.ModelAdmin):
     list_display = ["id", "hostname", "family", "timestamp"]
     search_fields = ["hostname"]
 

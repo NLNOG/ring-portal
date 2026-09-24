@@ -441,6 +441,27 @@ class SignupFlowTest(TestCase):
         anon_view = self.anon.get("/accounts/signups/")
         self.assertEqual(anon_view.status_code, 302)  # redirect to login
 
+    def test_signup_approve_blocked_when_legacy_readonly(self):
+        self.anon.post(
+            "/accounts/signup/",
+            {
+                "username": "newbie2",
+                "email": "newbie2@x",
+                "password": "pw1",
+                "password2": "pw1",
+                "company": str(self.org.pk),
+            },
+        )
+        signup = RingSignup.objects.get(django_user__username="newbie2")
+        with mock.patch("ring.views.legacy_writable", return_value=False):
+            r = self.managed.post(
+                "/accounts/signups/%d/approve/" % signup.pk, {"role": "user"}
+            )
+        self.assertEqual(r.status_code, 302)
+        signup.refresh_from_db()
+        self.assertIs(signup.approved, False)
+        self.assertFalse(RingUser.objects.filter(username="newbie2").exists())
+
     def test_reject_removes_account(self):
         self.anon.post(
             "/accounts/signup/",
@@ -533,7 +554,16 @@ class ParticipantEditTest(TestCase):
             as_other.content.decode(),
         )
         self.assertNotIn(self.edit_url(), as_other.content.decode())
-        self.assertNotIn("Edit Corp", as_other.content.decode())
+
+    def test_edit_blocked_when_legacy_readonly(self):
+        with mock.patch("ring.views.legacy_writable", return_value=False):
+            r = self.me.post(
+                self.edit_url(),
+                {"contact": "Teun", "email": "teun@editcorp.example"},
+            )
+        self.assertEqual(r.status_code, 302)
+        self.org.refresh_from_db()
+        self.assertNotEqual(self.org.contact, "Teun")
 
     def test_admin_can_rename_company(self):
         from django.contrib.auth import get_user_model
@@ -1031,6 +1061,74 @@ class PeeringDBOAuthTest(TestCase):
         self.assertEqual(ring_user.participant, existing)
         self.assertTrue(profile.django_user.is_active)
         self.assertEqual(participant_autnum(existing.pk), 200995)
+
+    @override_settings(**PDB_SETTINGS)
+    def test_callback_known_asn_blocked_when_readonly(self):
+        participant = Participant.objects.create(company="Example Net")
+        set_participant_autnum(participant.pk, 2914)
+        _, state = self._start_login()
+        with mock.patch(
+            "ring.views.exchange_code", return_value="tok"
+        ), mock.patch(
+            "ring.views.fetch_profile", return_value=PDB_PROFILE
+        ), mock.patch(
+            "ring.views.legacy_writable", return_value=False
+        ):
+            r = self.client.get(
+                "/accounts/peeringdb/callback/?code=abc&state=%s" % state
+            )
+        self.assertEqual(r.status_code, 200)
+        self.assertContains(r, "read-only")
+        self.assertNotIn("_auth_user_id", self.client.session)
+        self.assertEqual(RingUser.objects.count(), 0)
+        self.assertEqual(participant_autnum(participant.pk), 2914)
+
+    @override_settings(**PDB_SETTINGS)
+    def test_approve_pdb_signup_blocked_when_readonly(self):
+        make_owner("pdb-admin")
+        User.objects.create_superuser("pdb_admin", "a@x", "pw")
+        existing = Participant.objects.create(company="Bitterbal")
+        signup_user = User.objects.create_user(
+            username="pending-bb2", email="p@x"
+        )
+        signup_user.is_active = False
+        signup_user.save()
+        signup = PeeringDBSignup.objects.create(
+            django_user=signup_user,
+            peeringdb_id=9103,
+            peeringdb_net_id=99,
+            asn=200995,
+            net_name="BITTERBAL",
+        )
+        self.client.login(username="pdb_admin", password="pw")
+        with mock.patch("ring.views.legacy_writable", return_value=False):
+            r = self.client.post(
+                "/accounts/signups/peeringdb/%d/approve/" % signup.pk
+            )
+        self.assertEqual(r.status_code, 302)
+        signup.refresh_from_db()
+        self.assertIs(signup.approved, False)
+        self.assertEqual(
+            Participant.objects.filter(company="Bitterbal").count(), 1
+        )
+        self.assertIsNone(ring_user_for_pdb(9103)[0])
+
+    @override_settings(**PDB_SETTINGS)
+    def test_approve_pdb_signup_new_participant_blocked_when_readonly(self):
+        make_owner("pdb-admin")
+        admin = User.objects.create_superuser("pdb_admin", "a@x", "pw")
+        signup = self._make_pending_signup(admin, 3)
+        with mock.patch("ring.views.legacy_writable", return_value=False):
+            r = self.client.post(
+                "/accounts/signups/peeringdb/%d/approve/" % signup.pk
+            )
+        self.assertEqual(r.status_code, 302)
+        signup.refresh_from_db()
+        self.assertIs(signup.approved, False)
+        self.assertEqual(
+            Participant.objects.filter(company="Example Net").count(), 0
+        )
+        self.assertIsNone(ring_user_for_pdb(9003)[0])
 
     def _make_pending_signup(self, admin, salt):
         user = User.objects.create_user(

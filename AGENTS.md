@@ -153,10 +153,13 @@ Always invoke Python via the venv; run from repo root:
   DB, see README).
 - In live mode (`RING_LEGACY_DB=1` / `DB_ENGINE=mysql`) the 9 legacy models
   read/write the `legacy` MySQL alias and are SELECT-only in practice:
-  `allow_migrate` blocks DDL, and written commands/viewsets are guarded by
-  `assert_legacy_writable()`. Group A migrations still run against `default`
-  so the SQLite mirror (dev/tests) matches. Set `RING_LEGACY_WRITE_ENABLED=1`
-  to re-enable writes (dev only).
+  `allow_migrate` blocks DDL, and every write path is guarded by
+  `assert_legacy_writable()`/`legacy_writable()` (management commands,
+  DRF viewsets, web-auth views — participant edit, signup/PDB approval,
+  PDB provisioning — and the Django admin via `LegacyReadonlyAdminMixin`).
+  Group A migrations still run against `default` so the SQLite mirror
+  (dev/tests) matches. Set `RING_LEGACY_WRITE_ENABLED=1` to re-enable writes
+  (dev only).
 - The DB user for `legacy` must be SELECT-only; verify with
   `ring_dbreadonly_check` before pointing the live app at it.
 - Legacy domain semantics (user override of `machines.owner`, NULL==off flags,

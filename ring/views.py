@@ -42,6 +42,7 @@ from ring.services.peeringdb import (
     fetch_profile,
 )
 from ring.services.profiles import (
+    legacy_writable,
     link_ring_user,
     participant_autnum,
     participant_for_pdb,
@@ -604,6 +605,15 @@ def participant_edit(request, pk):
         if not can_rename:
             form.fields.pop("company")
         if form.is_valid():
+            if not legacy_writable():
+                messages.error(
+                    request,
+                    "Organisation edits are disabled: the ring database is "
+                    "read-only in this deployment.",
+                )
+                return redirect(
+                    "ring-my" if not can_rename else "ring-participants"
+                )
             form.save()
             messages.success(
                 request, "Organisation %s updated." % participant.company
@@ -744,18 +754,26 @@ def approve_signup(request, pk):
         if ring_user_obj is None:
             ring_user_obj = ring_user(user)
         if ring_user_obj is None:
+            if not legacy_writable():
+                messages.error(
+                    request,
+                    "No ring user '%s' exists and the ring database is "
+                    "read-only, so creating one is disabled." % ring_username,
+                )
+                return redirect("ring-signups")
             ring_user_obj = RingUser.objects.create(
                 username=ring_username or user.username,
                 participant=signup.company,
                 email=user.email,
                 active=True,
             )
+        if legacy_writable():
+            ring_user_obj.participant = signup.company
+            ring_user_obj.email = user.email or ring_user_obj.email
+            if request.POST.get("role") == "admin":
+                ring_user_obj.admin = True
+            ring_user_obj.save()
         link_ring_user(user, ring_user_obj)
-        ring_user_obj.participant = signup.company
-        ring_user_obj.email = user.email or ring_user_obj.email
-        if request.POST.get("role") == "admin":
-            ring_user_obj.admin = True
-        ring_user_obj.save()
         user.is_active = True
         user.email = ring_user_obj.email or user.email
         if request.POST.get("admin_staff"):
@@ -813,7 +831,9 @@ def _pdb_username(profile):
 def _pdb_provision(request, profile, net):
     """Resolve a PDB profile+network to a user login or a pending signup.
 
-    Returns ("user", user) once logged in, or ("pending", signup).
+    Returns ("user", user) once logged in ("blocked", message) when the ring
+    DB is read-only and a legacy account would have to be created, or
+    ("pending", signup).
     """
     User = get_user_model()
     peeringdb_id = int(profile["id"])
@@ -831,6 +851,15 @@ def _pdb_provision(request, profile, net):
     if participant is None:
         return ("pending", _pdb_create_signup(profile, net))
     set_participant_autnum(participant.pk, asn)
+
+    if not legacy_writable():
+        return (
+            "blocked",
+            "Your PeeringDB network matches participant '%s' but no ring "
+            "account is linked to it yet. The ring database is read-only, so "
+            "one cannot be created automatically; ask ring-admins to link "
+            "your account." % participant.company,
+        )
 
     user = User.objects.create_user(
         username=_pdb_username(profile),
@@ -866,7 +895,11 @@ def _pdb_sync_user(user, profile, ring_user=None):
         changed = True
     user.first_name = profile.get("given_name") or ""
     user.last_name = profile.get("family_name") or ""
-    if ring_user is not None and ring_user.email != email:
+    if (
+        ring_user is not None
+        and ring_user.email != email
+        and legacy_writable()
+    ):
         ring_user.email = email
         ring_user.save()
     if changed or user.first_name or user.last_name:
@@ -967,6 +1000,8 @@ def _pdb_enter(request, profile, net):
     kind, obj = _pdb_provision(request, profile, net)
     if kind == "pending":
         return render(request, "ring/pdb_pending.html", {})
+    if kind == "blocked":
+        return render(request, "ring/pdb_error.html", {"message": obj})
     messages.success(request, "Logged in via PeeringDB.")
     return redirect("/")
 
@@ -978,6 +1013,13 @@ def approve_peeringdb_signup(request, pk):
         user = signup.django_user
         participant = participant_for_pdb(signup.asn, signup.net_name)
         if participant is None:
+            if not legacy_writable():
+                messages.error(
+                    request,
+                    "Approval needs a new participant '%s', but the ring "
+                    "database is read-only." % (signup.net_name or ""),
+                )
+                return redirect("ring-signups")
             try:
                 participant = Participant.objects.create(
                     company=signup.net_name or "AS%s" % signup.asn,
@@ -991,6 +1033,13 @@ def approve_peeringdb_signup(request, pk):
                 if participant is None:
                     raise
         set_participant_autnum(participant.pk, signup.asn)
+        if not legacy_writable():
+            messages.error(
+                request,
+                "Approval needs a new ring user account for '%s', but the "
+                "ring database is read-only." % user.username,
+            )
+            return redirect("ring-signups")
         ring_user_obj = RingUser.objects.create(
             username=user.username,
             participant=participant,
