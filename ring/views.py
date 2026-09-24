@@ -741,7 +741,7 @@ def _pdb_provision(request, profile, net):
         return ("user", user)
 
     asn = int(net["asn"])
-    participant = participant_for_pdb(asn)
+    participant = participant_for_pdb(asn, net.get("name"))
     if participant is None:
         return ("pending", _pdb_create_signup(profile, net))
     set_participant_autnum(participant.pk, asn)

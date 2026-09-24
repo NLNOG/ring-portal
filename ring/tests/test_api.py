@@ -782,6 +782,23 @@ class PeeringDBOAuthTest(TestCase):
         self.assertTrue(Token.objects.filter(user=profile.django_user).exists())
 
     @override_settings(**PDB_SETTINGS)
+    def test_callback_matches_participant_by_company(self):
+        participant = Participant.objects.create(company="Example Net")
+        _, state = self._start_login()
+        with mock.patch(
+            "ring.views.exchange_code", return_value="tok"
+        ), mock.patch("ring.views.fetch_profile", return_value=PDB_PROFILE):
+            r = self.client.get(
+                "/accounts/peeringdb/callback/?code=abc&state=%s" % state
+            )
+        self.assertEqual(r.status_code, 302)
+        self.assertIn("_auth_user_id", self.client.session)
+        self.assertEqual(PeeringDBSignup.objects.count(), 0)
+        ring_user, _ = ring_user_for_pdb(9001)
+        self.assertEqual(ring_user.participant, participant)
+        self.assertEqual(participant_autnum(participant.pk), 2914)
+
+    @override_settings(**PDB_SETTINGS)
     def test_callback_existing_user_logs_in(self):
         participant = Participant.objects.create(company="Example Net")
         set_participant_autnum(participant.pk, 2914)
