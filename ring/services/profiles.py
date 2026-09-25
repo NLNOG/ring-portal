@@ -15,6 +15,7 @@ from ring.models import (
     Machine,
     Participant,
     ParticipantProfile,
+    PeeringDBNetwork,
     RingUser,
     RingUserProfile,
 )
@@ -99,6 +100,100 @@ def link_ring_user(django_user, ring_user, peeringdb_id=None, peeringdb_net_id=N
         profile.peeringdb_net_id = peeringdb_net_id
     profile.save()
     return profile
+
+
+def link_pdb_network(django_user, peeringdb_net_id, asn=None, net_name=None,
+                     participant_id=None, participant=None):
+    """Record that a user acts for one PeeringDB network / participant.
+
+    ``participant`` (a legacy Participant) is resolved to its integer pk and
+    stored in the app-side column. The first linked network is remembered as
+    the profile's primary ``peeringdb_net_id`` for backwards compatibility.
+    """
+    pid = getattr(participant, "pk", participant_id)
+    link, _ = PeeringDBNetwork.objects.get_or_create(
+        django_user=django_user,
+        peeringdb_net_id=peeringdb_net_id,
+        defaults={
+            "asn": asn or 0,
+            "net_name": net_name,
+            "participant_id": pid,
+        },
+    )
+    if asn is not None:
+        link.asn = asn
+    if net_name is not None:
+        link.net_name = net_name
+    if pid is not None:
+        link.participant_id = pid
+    link.save()
+    profile = RingUserProfile.objects.filter(django_user=django_user).first()
+    if (
+        profile is not None
+        and profile.peeringdb_net_id is None
+        and peeringdb_net_id
+    ):
+        profile.peeringdb_net_id = peeringdb_net_id
+        profile.save()
+    return link
+
+
+def pdb_networks(user):
+    """PeeringDBNetwork links for a user, in link order."""
+    user = _authenticated(user)
+    if user is None:
+        return []
+    return list(PeeringDBNetwork.objects.filter(django_user=user))
+
+
+def member_participant_ids(user):
+    """Set of participant ids a member is linked to (legacy + all PDB networks)."""
+    user = _authenticated(user)
+    if user is None:
+        return set()
+    ids = set(PeeringDBNetwork.objects.filter(django_user=user)
+              .values_list("participant_id", flat=True))
+    ru = ring_user(user)
+    if ru and ru.participant_id:
+        ids.add(ru.participant_id)
+    return ids
+
+
+def active_participant_id(request):
+    """Participant id currently in scope for a request, or None.
+
+    Session-selected org wins; otherwise the legacy RingUser's participant,
+    falling back to the first linked PeeringDB network's participant.
+    """
+    user = _authenticated(request.user if request is not None else None)
+    if user is None:
+        return None
+    ids = member_participant_ids(user)
+    session_pk = request.session.get("active_participant_id")
+    if session_pk in ids:
+        return session_pk
+    ru = ring_user(user)
+    if ru and ru.participant_id:
+        return ru.participant_id
+    link = PeeringDBNetwork.objects.filter(django_user=user).first()
+    if link is not None:
+        return link.participant_id
+    return None
+
+
+def active_participant(request):
+    pid = active_participant_id(request)
+    if pid is None:
+        return None
+    return Participant.objects.filter(pk=pid).first()
+
+
+def switch_active_participant(request, participant_id):
+    """Make ``participant_id`` the active org for a request, if linked."""
+    if participant_id in member_participant_ids(request.user):
+        request.session["active_participant_id"] = participant_id
+        return True
+    return False
 
 
 def participant_profile(participant_or_id):

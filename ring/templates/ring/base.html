@@ -157,6 +157,18 @@ code { background: var(--bg-tint); border: 1px solid var(--border); padding: 2px
   <div class="auth">
     {% if request.user.is_authenticated %}
       {% if user_can_manage %}<a href="{% url 'ring-signups' %}">Signups</a>{% endif %}
+      {% if user_organisations|length > 1 %}
+        <span class="muted">Org:</span>
+        {% for o in user_organisations %}
+          {% if o.active %}
+            <span class="pill" style="background:rgba(255,255,255,.22)">{{ o.participant.company }}</span>
+          {% else %}
+            <a href="{% url 'ring-participant-switch' o.participant.pk %}?next={{ request.path }}">{{ o.participant.company }}</a>
+          {% endif %}
+        {% endfor %}
+      {% elif user_organisations|length == 1 %}
+        <span class="muted">{{ user_organisations.0.participant.company }}</span>
+      {% endif %}
       <span class="muted">{{ request.user.username }}</span>
       <form method="post" action="{% url 'ring-logout' %}">{% csrf_token %}<button type="submit" class="btn-outline auth-btn">Log out</button></form>
     {% else %}

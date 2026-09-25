@@ -26,6 +26,11 @@ urlpatterns = [
         name="ring-participant-edit",
     ),
     path(
+        "participants/<int:pk>/switch/",
+        views.participant_switch,
+        name="ring-participant-switch",
+    ),
+    path(
         "accounts/login/",
         auth_views.LoginView.as_view(template_name="ring/login.html"),
         name="ring-login",

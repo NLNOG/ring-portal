@@ -20,6 +20,7 @@ from ring.models import (
     SSHKey,
 )
 from ring.services.profiles import (
+    link_pdb_network,
     link_ring_user,
     participant_autnum,
     participant_for_autnum,
@@ -657,6 +658,60 @@ class MemberPortalTest(TestCase):
         self.assertIn("mine.ring.nlnog.net", content)
         self.assertNotIn("theirs.ring.nlnog.net", content)
 
+    def _link_member_to_other_org(self):
+        link_pdb_network(
+            User.objects.get(username="member1"),
+            101,
+            asn=2,
+            net_name="Secret Corp",
+            participant=self.other_org,
+        )
+
+    def test_switch_org_reparents_portal(self):
+        self._link_member_to_other_org()
+        r = self.client.get(
+            "/participants/%d/switch/?next=/my/" % self.other_org.pk
+        )
+        self.assertEqual(r.status_code, 302)
+        page = self.client.get("/my/")
+        self.assertEqual(page.context["participant"].pk, self.other_org.pk)
+        content = page.content.decode()
+        self.assertIn("Secret Corp", content)
+        self.assertIn("theirs.ring.nlnog.net", content)
+        self.assertNotIn("mine.ring.nlnog.net", content)
+
+    def test_switch_back_scopes_back(self):
+        self._link_member_to_other_org()
+        self.client.get("/participants/%d/switch/" % self.other_org.pk)
+        self.client.get("/participants/%d/switch/?next=/my/" % self.org.pk)
+        page = self.client.get("/my/")
+        self.assertEqual(page.context["participant"].pk, self.org.pk)
+        content = page.content.decode()
+        self.assertIn("mine.ring.nlnog.net", content)
+        self.assertNotIn("theirs.ring.nlnog.net", content)
+
+    def test_cannot_switch_to_unlinked_org(self):
+        third = Participant.objects.create(company="Third Corp")
+        r = self.client.get("/participants/%d/switch/" % third.pk)
+        self.assertEqual(r.status_code, 302)
+        page = self.client.get("/my/")
+        self.assertEqual(page.context["participant"].pk, self.org.pk)
+        self.assertNotIn("Third Corp", page.content.decode())
+
+    def test_machine_detail_follows_switch(self):
+        self._link_member_to_other_org()
+        self.client.get("/participants/%d/switch/" % self.other_org.pk)
+        self.assertEqual(
+            self.client.get(
+                "/machines/%s/" % self.their_machine.hostname
+            ).status_code,
+            200,
+        )
+        self.assertEqual(
+            self.client.get("/machines/%s/" % self.my_machine.hostname).status_code,
+            302,
+        )
+
 
 class HealthAlertViewsTest(TestCase):
     def setUp(self):
@@ -946,12 +1001,95 @@ class PeeringDBOAuthTest(TestCase):
         page = self.client.get(r.url)
         self.assertContains(page, "AS2914")
         self.assertContains(page, "AS3333")
-        r2 = self.client.post(r.url, {"asn": "3333"})
+        r2 = self.client.post(r.url, {"asns": ["2914", "3333"]})
         self.assertEqual(r2.status_code, 302)
         self.assertNotIn("pdb_profile", self.client.session)
+        ring_user, profile = ring_user_for_pdb(9001)
+        self.assertEqual(ring_user.participant, p1)
+        links = profile.django_user.pdb_networks.order_by("id")
+        self.assertEqual(list(links.values_list("asn", flat=True)), [2914, 3333])
         self.assertEqual(
-            participant_autnum(ring_user_for_pdb(9001)[0].participant.pk), 3333
+            self.client.session["active_participant_id"], p1.pk
         )
+        self.assertEqual(participant_autnum(p1.pk), 2914)
+        self.assertEqual(participant_autnum(p2.pk), 3333)
+
+    @override_settings(**PDB_SETTINGS)
+    def test_callback_multi_pick_single_network_only(self):
+        p1 = Participant.objects.create(company="Example Net")
+        p2 = Participant.objects.create(company="Other Net")
+        set_participant_autnum(p1.pk, 2914)
+        set_participant_autnum(p2.pk, 3333)
+        profile = dict(PDB_PROFILE)
+        profile["networks"] = [
+            {"perms": 15, "asn": 2914, "name": "Example Net", "id": 99},
+            {"perms": 15, "asn": 3333, "name": "Other Net", "id": 101},
+        ]
+        _, state = self._start_login()
+        with mock.patch(
+            "ring.views.exchange_code", return_value="tok"
+        ), mock.patch("ring.views.fetch_profile", return_value=profile):
+            r = self.client.get(
+                "/accounts/peeringdb/callback/?code=abc&state=%s" % state
+            )
+        r2 = self.client.post(r.url, {"asns": ["3333"]})
+        self.assertEqual(r2.status_code, 302)
+        _, profile = ring_user_for_pdb(9001)
+        self.assertEqual(
+            list(profile.django_user.pdb_networks.values_list("asn", flat=True)),
+            [3333],
+        )
+        self.assertEqual(
+            self.client.session["active_participant_id"], p2.pk
+        )
+
+    @override_settings(**PDB_SETTINGS)
+    def test_callback_multi_pick_none_reloads(self):
+        profile = dict(PDB_PROFILE)
+        profile["networks"] = [
+            {"perms": 15, "asn": 2914, "name": "Example Net", "id": 99},
+            {"perms": 15, "asn": 3333, "name": "Other Net", "id": 101},
+        ]
+        _, state = self._start_login()
+        with mock.patch(
+            "ring.views.exchange_code", return_value="tok"
+        ), mock.patch("ring.views.fetch_profile", return_value=profile):
+            r = self.client.get(
+                "/accounts/peeringdb/callback/?code=abc&state=%s" % state
+            )
+        r2 = self.client.post(r.url, {"asns": []})
+        self.assertEqual(r2.status_code, 200)
+        self.assertContains(r2, "Select at least one network")
+        self.assertIn("pdb_profile", self.client.session)
+        self.assertNotIn("_auth_user_id", self.client.session)
+
+    @override_settings(**PDB_SETTINGS)
+    def test_callback_partial_match_links_known_only(self):
+        p1 = Participant.objects.create(company="Example Net")
+        set_participant_autnum(p1.pk, 2914)
+        profile = dict(PDB_PROFILE)
+        profile["networks"] = [
+            {"perms": 15, "asn": 2914, "name": "Example Net", "id": 99},
+            {"perms": 15, "asn": 3333, "name": "Unknown Net", "id": 101},
+        ]
+        _, state = self._start_login()
+        with mock.patch(
+            "ring.views.exchange_code", return_value="tok"
+        ), mock.patch("ring.views.fetch_profile", return_value=profile):
+            r = self.client.get(
+                "/accounts/peeringdb/callback/?code=abc&state=%s" % state
+            )
+        r2 = self.client.post(r.url, {"asns": ["2914", "3333"]})
+        self.assertEqual(r2.status_code, 302)
+        self.assertIn("_auth_user_id", self.client.session)
+        page = self.client.get("/", follow=True)
+        self.assertContains(page, "AS3333 Unknown Net")
+        _, profile = ring_user_for_pdb(9001)
+        self.assertEqual(
+            list(profile.django_user.pdb_networks.values_list("asn", flat=True)),
+            [2914],
+        )
+        self.assertEqual(PeeringDBSignup.objects.count(), 0)
 
     @override_settings(**PDB_SETTINGS)
     def test_callback_no_networks(self):

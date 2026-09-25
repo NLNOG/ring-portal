@@ -43,7 +43,9 @@
         <tr><th>Ring user</th><td>{{ ru.username|default:"—" }}</td></tr>
         <tr><th>Role</th><td>{% if ru.admin %}<span class="badge ok">admin</span>{% else %}<span class="badge muted">member</span>{% endif %}</td></tr>
         <tr><th>PeeringDB id</th><td>{{ pdb_id|default:"—" }}</td></tr>
-        {% if pdb_net_id %}<tr><th>PeeringDB network</th><td>{{ pdb_net_id }}</td></tr>{% endif %}
+        <tr><th>Linked networks</th><td>
+          {% for net in pdb_nets %}<span class="badge muted">AS{{ net.asn }}{% if net.company %} — {{ net.company }}{% endif %}</span> {% empty %}<span class="muted">—</span>{% endfor %}
+        </td></tr>
       </tbody>
     </table>
   </section>

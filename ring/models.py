@@ -312,6 +312,33 @@ class RingUserProfile(models.Model):
         return "profile for user %s" % self.ring_user_id
 
 
+class PeeringDBNetwork(models.Model):
+    """App-side (SQLite) link between a Django user and a PeeringDB network.
+
+    A person may act for several networks (each mapped to one RING
+    participant). ``participant_id`` is a plain integer column because the
+    participant lives in the read-only legacy database and Django forbids
+    foreign keys across databases.
+    """
+
+    django_user = models.ForeignKey(
+        get_user_model(),
+        on_delete=models.CASCADE,
+        related_name="pdb_networks",
+    )
+    peeringdb_net_id = models.IntegerField()
+    asn = models.IntegerField()
+    net_name = models.CharField(max_length=255, blank=True, null=True)
+    participant_id = models.IntegerField()
+
+    class Meta:
+        unique_together = [("django_user", "peeringdb_net_id")]
+        ordering = ["id"]
+
+    def __str__(self):
+        return "PDB net AS%s for user %s" % (self.asn, self.django_user_id)
+
+
 class ParticipantProfile(models.Model):
     """App-side (SQLite) extensions for a legacy ``participants`` row."""
 

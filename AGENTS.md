@@ -2,19 +2,19 @@
 
 ## Repo state
 
-Small local git history only (6 commits on `main`), no remote, working tree
-clean. This is a Django 5.2 port ("ring-portal") of the NLNOG Ring admin tool.
-Verified environment: `.venv/` (Django 5.2.x + deps), SQLite, DEBUG=True.
-Migrations exist and are applied against `db.sqlite3` (gitignored).
+Small local git history (branch `devel` tracks `origin/devel`, in sync with
+`main`), working tree clean. This is a Django 5.2+ port
+("ring-portal") of the NLNOG Ring admin tool. Verified environment: `venv/`
+(Django 5.2.x + deps, Python 3.14), SQLite, DEBUG=True. Migrations exist and
+are applied against `db.sqlite3` (gitignored).
 `ring.sql` (gitignored, ~986MB mysqldump) is the dev seed source used by the
 `ring_seed` command. No CI, no formatter/linter manifest yet. The DB backend is
 selected by env: default SQLite, `DB_ENGINE=mysql` (PyMySQL drop-in) with
 `DB_NAME/DB_USER/DB_PASSWORD/DB_HOST/DB_PORT`. The app is dual-DB capable: the
 9 legacy-backed models read from a read-only MySQL alias (`legacy`) when
 `DB_ENGINE=mysql` or `RING_LEGACY_DB=1`, otherwise they use SQLite mirror
-tables (dev/tests). All app-added data (auth, tokens, signups, profiles) lives
-exclusively in SQLite. NOTE: `.venv` currently mixes 3.12 (app) and 3.14 (pip)
-— always install deps with `.venv/bin/python3.12 -m pip`.
+tables (dev/tests). All app-added data (auth, tokens, signups, profiles,
+network links) lives exclusively in SQLite. Install deps with `venv/bin/python -m pip`.
 
 ## Layout
 
@@ -29,7 +29,10 @@ exclusively in SQLite. NOTE: `.venv` currently mixes 3.12 (app) and 3.14 (pip)
     the `Participant`), `PeeringDBSignup` (pending PeeringDB-driven
     registrations waiting on admin approval), `RingUserProfile`
     (`django_user` 1:1 with `auth.User`, `ring_user_id`, `peeringdb_id`,
-    `peeringdb_net_id` SSO binding), `ParticipantProfile` (`participant_id`,
+    `peeringdb_net_id` primary SSO binding), `PeeringDBNetwork` (one row per
+    user/network: `django_user`, `peeringdb_net_id`, `asn`, `net_name`,
+    `participant_id` IntegerField — the multi-network SSO link set that powers
+    the org switcher), `ParticipantProfile` (`participant_id`,
     `autnum` PeeringDB ASN identity). Never add FK/OneToOne columns pointing
     from legacy tables to SQLite tables: cross-database relations are
     forbidden; put support data in these profile tables instead.
@@ -50,11 +53,15 @@ exclusively in SQLite. NOTE: `.venv` currently mixes 3.12 (app) and 3.14 (pip)
     `legacy`; `allow_relation` disallows cross-DB relations.
   - `services/profiles.py` — the app-facing layer for linked-user/ASN identity:
     `ring_user(user)`, `profile_for_ring_user`, `ring_user_for_pdb`,
-    `link_ring_user`, `participant_autnum`, `participant_for_autnum`,
-    `set_participant_autnum`, plus `legacy_writable()` /
-    `assert_legacy_writable()` (raise `LegacyReadonlyError`; gated by
-    `RING_LEGACY_WRITE_ENABLED=1`). Use these from views/commands — never
-    reach into profile tables directly.
+    `link_ring_user`, `link_pdb_network`, `pdb_networks(user)`,
+    `member_participant_ids(user)` (legacy org + all linked networks),
+    `active_participant_id(request)`/`active_participant(request)`
+    (session-selected org, falling back to the legacy org then first link),
+    `switch_active_participant(request, pk)`, `participant_autnum`,
+    `participant_for_autnum`, `set_participant_autnum`, plus
+    `legacy_writable()` / `assert_legacy_writable()` (raise
+    `LegacyReadonlyError`; gated by `RING_LEGACY_WRITE_ENABLED=1`). Use these
+    from views/commands — never reach into profile tables directly.
   - `kpi_cache.py` — LocMemCache-backed KPI aggregates (`cached_failed_7d`,
     `cached_ubuntu_releases`) keyed by a version (bumped by
     `ring_process_status`) + hourly bucket, TTL 10min. Dashboards call these
@@ -68,17 +75,24 @@ exclusively in SQLite. NOTE: `.venv` currently mixes 3.12 (app) and 3.14 (pip)
     account/*; `api-auth/` for browsable API.
   - Web auth: `views.py` `signup`/`signups`/`approve_signup`/`reject_signup`,
     plus PeeringDB OAuth: `peeringdb_login`/`peeringdb_callback`/
-    `peeringdb_pick` and `approve_peeringdb_signup`/`reject_peeringdb_signup`,
-    `context_processors.py` (`user_can_manage`, `pdb_enabled`), URLs under
+    `peeringdb_pick` (multi-network selection — a PDB user with several
+    networks picks a *set* via checkboxes; each is matched to a participant,
+    linked via `PeeringDBNetwork`, and unmatched ones are reported) and
+    `approve_peeringdb_signup`/`reject_peeringdb_signup`, plus
+    `participant_switch` (`/participants/<pk>/switch/`, session org
+    switcher), `context_processors.py` (`user_can_manage`, `pdb_enabled`,
+    `active_participant`, `user_organisations`), URLs under
     `/accounts/{login,logout,signup,signups,peeringdb/*}`. Models, migrations,
     templates and tests all cover these.
   - Role split: `user_can_manage` (ring admins) get the full dashboards:
     `index` (`/`), `machines`, `participants`, `users`, `participant_info` —
     these are `@admin_or_portal` (regular members get redirected to `/my/`).
-    Regular linked members land on `my_portal` (`/my/`, `ring-my`: own
-    company, account, PeeringDB binding and their own nodes + issues) and may
-    view `machine_detail`/`machine_status` and edit their own participant
-    only. Never leak other organisations' names/emails to members; the issue
+    Regular linked members land on `my_portal` (`/my/`, `ring-my`: active
+    company, account, PeeringDB binding and their nodes + issues) and may
+    view `machine_detail`/`machine_status` and edit *any* participant they are
+    linked to, scoped by the session "active org" (multi-org members switch
+    via the header switcher; the API still scopes to the legacy RingUser org).
+    Never leak other organisations' names/emails to members; the issue
     scanner helper `_scoped_issues(queryset, since)` + `_issue_summary()`
     keep member issue views scoped to their own nodes.
   - `services/` — `geocoding.py` (pycountry/nominatim, lru_cache), `nodestatus.py`
@@ -101,7 +115,8 @@ exclusively in SQLite. NOTE: `.venv` currently mixes 3.12 (app) and 3.14 (pip)
     use the `ago`/`days_ago` filters from `templatetags/ring_filters.py`.
   - `tests/` — `test_api.py` (CRUD, ingest auth, org-scoped authz, signup flow,
     account endpoints, participant self-edit, paginated list, PeeringDB OAuth
-    provisioning/approval with mocked OAuth endpoints, asn backfill),
+    provisioning/approval with mocked OAuth endpoints incl. multi-network
+    selection + org-switch scoping, asn backfill),
     `test_nodestatus.py` (activate/deactivate/alive/guard transitions),
     `test_kpi_cache.py` (cached aggregates, version-bump invalidation, 0-query
     re-calls), `test_profiles.py` (profile helpers + EpochDateTimeField
@@ -125,20 +140,20 @@ exclusively in SQLite. NOTE: `.venv` currently mixes 3.12 (app) and 3.14 (pip)
 
 Always invoke Python via the venv; run from repo root:
 
-- Run server: `.venv/bin/python manage.py runserver`
-- Migrations: `.venv/bin/python manage.py makemigrations` then `migrate`
-- Tests: `.venv/bin/python manage.py test ring`
-- Single test: `.venv/bin/python manage.py test ring.tests.test_api.ApiCrudTest.test_machine_search`
-- System/URL check: `.venv/bin/python manage.py check`
-- Seed from dump: `.venv/bin/python manage.py ring_seed` (full; re-seed status
+- Run server: `venv/bin/python manage.py runserver`
+- Migrations: `venv/bin/python manage.py makemigrations` then `migrate`
+- Tests: `venv/bin/python manage.py test ring`
+- Single test: `venv/bin/python manage.py test ring.tests.test_api.ApiCrudTest.test_machine_search`
+- System/URL check: `venv/bin/python manage.py check`
+- Seed from dump: `venv/bin/python manage.py ring_seed` (full; re-seed status
   tables only: `ring_seed --only ansible health`). Takes ~11 min per table
   group, writes in batches of 5000. Flags: `--only`, `--full`, `--since`,
   `--no-clear`.
-- Process status: `.venv/bin/python manage.py ring_process_status [--send]`
-- Backfill participant ASNs: `.venv/bin/python manage.py ring_backfill_asn`
+- Process status: `venv/bin/python manage.py ring_process_status [--send]`
+- Backfill participant ASNs: `venv/bin/python manage.py ring_backfill_asn`
   (populates `ParticipantProfile.autnum` from machines; reports participants
   whose machines span multiple ASNs for manual review).
-- Legacy read-only verification: `.venv/bin/python manage.py
+- Legacy read-only verification: `venv/bin/python manage.py
   ring_dbreadonly_check` (expects a SELECT-only `legacy` MySQL account; write
   probes must be rejected).
 

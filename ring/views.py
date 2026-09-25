@@ -42,14 +42,20 @@ from ring.services.peeringdb import (
     fetch_profile,
 )
 from ring.services.profiles import (
+    active_participant,
+    active_participant_id,
     legacy_writable,
+    link_pdb_network,
     link_ring_user,
+    member_participant_ids,
     participant_autnum,
     participant_for_pdb,
+    pdb_networks,
     profile_for_user,
     ring_user,
     ring_user_for_pdb,
     set_participant_autnum,
+    switch_active_participant,
 )
 from ring.zone import fqdn, short
 
@@ -112,13 +118,11 @@ def admin_or_portal(view):
 
 
 def _can_view_machine(request, machine):
-    """Admins see any machine; members only their own participant's nodes."""
+    """Admins see any machine; members only their active participant's nodes."""
     if user_can_manage(request.user):
         return True
-    ru = ring_user(request.user)
-    return bool(
-        ru and ru.participant_id and machine.owner.participant_id == ru.participant_id
-    )
+    pid = active_participant_id(request)
+    return bool(pid and machine.owner.participant_id == pid)
 
 
 def _scoped_issues(machines_qs, since):
@@ -557,10 +561,7 @@ def _editable_participant_pks(user):
     """Set of participant pks a user may edit, or None meaning "all"."""
     if user_can_manage(user):
         return None
-    ru = ring_user(user)
-    if ru and ru.participant_id:
-        return {ru.participant_id}
-    return set()
+    return member_participant_ids(user)
 
 
 class ParticipantEditForm(forms.ModelForm):
@@ -593,9 +594,8 @@ class ParticipantEditForm(forms.ModelForm):
 @login_required
 def participant_edit(request, pk):
     participant = get_object_or_404(Participant, pk=pk)
-    ru = ring_user(request.user)
-    if not user_can_manage(request.user) and not (
-        ru and ru.participant_id == participant.pk
+    if not user_can_manage(request.user) and (
+        participant.pk not in member_participant_ids(request.user)
     ):
         return redirect("ring-login")
     can_rename = user_can_manage(request.user)
@@ -634,9 +634,9 @@ def participant_edit(request, pk):
 
 @login_required
 def my_portal(request):
-    """Member landing page: own company, account and nodes only."""
+    """Member landing page: active company, account and nodes only."""
     ru = ring_user(request.user)
-    participant = ru.participant if (ru and ru.participant_id) else None
+    participant = active_participant(request)
     since = timezone.now() - timedelta(days=7)
     if participant is None:
         machines_qs = Machine.objects.none()
@@ -650,6 +650,18 @@ def my_portal(request):
     )
 
     profile = profile_for_user(request.user)
+    pdb_nets = []
+    for link in pdb_networks(request.user):
+        net_participant = Participant.objects.filter(
+            pk=link.participant_id
+        ).first()
+        pdb_nets.append(
+            {
+                "asn": link.asn,
+                "net_name": link.net_name,
+                "company": net_participant.company if net_participant else None,
+            }
+        )
     return render(
         request,
         "ring/my_portal.html",
@@ -658,7 +670,7 @@ def my_portal(request):
             "participant": participant,
             "autnum": participant_autnum(participant) if participant else None,
             "pdb_id": profile.peeringdb_id if profile else None,
-            "pdb_net_id": profile.peeringdb_net_id if profile else None,
+            "pdb_nets": pdb_nets,
             "machines": machines_qs.order_by("hostname"),
             "machine_count": machines_qs.count(),
             "active_count": machines_qs.filter(active=True).count(),
@@ -828,63 +840,84 @@ def _pdb_username(profile):
     return candidate
 
 
-def _pdb_provision(request, profile, net):
-    """Resolve a PDB profile+network to a user login or a pending signup.
+def _pdb_provision(request, profile, nets):
+    """Resolve a PDB profile + selected networks to a user login or pending signup.
 
-    Returns ("user", user) once logged in ("blocked", message) when the ring
-    DB is read-only and a legacy account would have to be created, or
-    ("pending", signup).
+    Runs once per login for the whole batch of networks the user picked. Each
+    selected network is matched to a participant independently:
+
+    Returns ("user", user, unmatched) once logged in — user is linked to every
+    matched network while ``unmatched`` lists the networks with no matching
+    participant; ("blocked", message, unmatched) when the ring DB is read-only
+    and a legacy account would have to be created; or ("pending", signup, [])
+    when a brand-new identity has no matching participant at all.
     """
     User = get_user_model()
     peeringdb_id = int(profile["id"])
     ring_user_obj, profile_row = ring_user_for_pdb(peeringdb_id)
+
+    matched = []
+    unmatched = []
+    for net in nets:
+        asn = int(net["asn"])
+        participant = participant_for_pdb(asn, net.get("name"))
+        if participant is None:
+            unmatched.append(net)
+        else:
+            matched.append((net, participant))
+
     if ring_user_obj is not None and profile_row is not None:
         user = profile_row.django_user
         _pdb_sync_user(user, profile, ring_user_obj)
-        auth_login(
-            request, user, backend="django.contrib.auth.backends.ModelBackend"
+    else:
+        if not matched:
+            return ("pending", _pdb_create_signup(profile, nets[0]), [])
+        if not legacy_writable():
+            return (
+                "blocked",
+                "Your PeeringDB network matches participant '%s' but no ring "
+                "account is linked to it yet. The ring database is read-only, so "
+                "one cannot be created automatically; ask ring-admins to link "
+                "your account." % matched[0][1].company,
+                unmatched,
+            )
+        participant = matched[0][1]
+        user = User.objects.create_user(
+            username=_pdb_username(profile),
+            email=profile.get("email") or "",
+            password=None,
         )
-        return ("user", user)
-
-    asn = int(net["asn"])
-    participant = participant_for_pdb(asn, net.get("name"))
-    if participant is None:
-        return ("pending", _pdb_create_signup(profile, net))
-    set_participant_autnum(participant.pk, asn)
-
-    if not legacy_writable():
-        return (
-            "blocked",
-            "Your PeeringDB network matches participant '%s' but no ring "
-            "account is linked to it yet. The ring database is read-only, so "
-            "one cannot be created automatically; ask ring-admins to link "
-            "your account." % participant.company,
+        user.is_active = True
+        user.first_name = profile.get("given_name") or ""
+        user.last_name = profile.get("family_name") or ""
+        user.save()
+        ring_user_obj = RingUser.objects.create(
+            username=user.username,
+            participant=participant,
+            email=user.email or "",
+            active=True,
         )
+        link_ring_user(
+            user,
+            ring_user_obj,
+            peeringdb_id=peeringdb_id,
+            peeringdb_net_id=int(matched[0][0].get("id") or 0) or None,
+        )
+        Token.objects.get_or_create(user=user)
 
-    user = User.objects.create_user(
-        username=_pdb_username(profile),
-        email=profile.get("email") or "",
-        password=None,
-    )
-    user.is_active = True
-    user.first_name = profile.get("given_name") or ""
-    user.last_name = profile.get("family_name") or ""
-    user.save()
-    ring_user_obj = RingUser.objects.create(
-        username=user.username,
-        participant=participant,
-        email=user.email or "",
-        active=True,
-    )
-    link_ring_user(
-        user,
-        ring_user_obj,
-        peeringdb_id=peeringdb_id,
-        peeringdb_net_id=int(net.get("id") or 0) or None,
-    )
-    Token.objects.get_or_create(user=user)
+    for net, participant in matched:
+        set_participant_autnum(participant.pk, int(net["asn"]))
+        link_pdb_network(
+            user,
+            int(net.get("id") or 0),
+            asn=int(net["asn"]),
+            net_name=net.get("name"),
+            participant=participant,
+        )
     auth_login(request, user, backend="django.contrib.auth.backends.ModelBackend")
-    return ("user", user)
+    if matched:
+        switch_active_participant(request, matched[0][1].pk)
+    return ("user", user, unmatched)
 
 
 def _pdb_sync_user(user, profile, ring_user=None):
@@ -969,7 +1002,7 @@ def peeringdb_callback(request):
     if len(candidates) > 1:
         request.session["pdb_profile"] = profile
         return redirect("ring-pdb-pick")
-    return _pdb_enter(request, profile, candidates[0])
+    return _pdb_enter(request, profile, [candidates[0]])
 
 
 def peeringdb_pick(request):
@@ -978,17 +1011,22 @@ def peeringdb_pick(request):
         return redirect("ring-pdb-login")
     candidates = _pdb_candidates(profile)
     if request.method == "POST":
-        try:
-            asn = int(request.POST.get("asn", ""))
-        except ValueError:
-            asn = None
-        net = next((n for n in candidates if int(n.get("asn")) == asn), None)
-        request.session.pop("pdb_profile", None)
-        if net is None:
+        picked = [
+            n for n in candidates if str(n.get("asn")) in request.POST.getlist("asns")
+        ]
+        if not picked:
             return render(
-                request, "ring/pdb_error.html", {"message": "That network is not available for your account."}
+                request,
+                "ring/pdb_pick.html",
+                {
+                    "candidates": sorted(
+                        candidates, key=lambda n: n.get("asn")
+                    ),
+                    "error": "Select at least one network.",
+                },
             )
-        return _pdb_enter(request, profile, net)
+        request.session.pop("pdb_profile", None)
+        return _pdb_enter(request, profile, picked)
     return render(
         request,
         "ring/pdb_pick.html",
@@ -996,14 +1034,37 @@ def peeringdb_pick(request):
     )
 
 
-def _pdb_enter(request, profile, net):
-    kind, obj = _pdb_provision(request, profile, net)
+def _pdb_enter(request, profile, nets):
+    kind, obj, unmatched = _pdb_provision(request, profile, nets)
+    if unmatched:
+        names = ", ".join(
+            "AS%s%s" % (n["asn"], (" " + n["name"]) if n.get("name") else "")
+            for n in unmatched
+        )
+        messages.warning(
+            request,
+            "No RING participant matches %s; those networks are not linked to "
+            "your account." % names,
+        )
     if kind == "pending":
         return render(request, "ring/pdb_pending.html", {})
     if kind == "blocked":
         return render(request, "ring/pdb_error.html", {"message": obj})
     messages.success(request, "Logged in via PeeringDB.")
     return redirect("/")
+
+
+@login_required
+def participant_switch(request, pk):
+    """Switch a member's active organisation (org of the moment)."""
+    target = request.GET.get("next") or "ring-my"
+    if not (target.startswith("/") and not target.startswith("//")):
+        target = "ring-my"
+    if switch_active_participant(request, pk):
+        messages.success(request, "Now working on behalf of that organisation.")
+    else:
+        messages.error(request, "You are not linked to that organisation.")
+    return redirect(target)
 
 
 @user_passes_test(user_can_manage, login_url="ring-login")
@@ -1051,6 +1112,13 @@ def approve_peeringdb_signup(request, pk):
             ring_user_obj,
             peeringdb_id=signup.peeringdb_id,
             peeringdb_net_id=signup.peeringdb_net_id,
+        )
+        link_pdb_network(
+            user,
+            signup.peeringdb_net_id,
+            asn=signup.asn,
+            net_name=signup.net_name,
+            participant=participant,
         )
         user.is_active = True
         user.email = ring_user_obj.email or user.email

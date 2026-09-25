@@ -8,6 +8,7 @@ from .models import (
     Participant,
     ParticipantProfile,
     ParticipantRemark,
+    PeeringDBNetwork,
     PeeringDBSignup,
     RingSignup,
     RingUser,
@@ -154,6 +155,13 @@ class HealthReportAdmin(LegacyReadonlyAdminMixin, admin.ModelAdmin):
 class RingUserProfileAdmin(admin.ModelAdmin):
     list_display = ["id", "django_user", "ring_user_id", "peeringdb_id", "peeringdb_net_id"]
     search_fields = ["django_user__username", "ring_user_id", "peeringdb_id"]
+
+
+@admin.register(PeeringDBNetwork)
+class PeeringDBNetworkAdmin(admin.ModelAdmin):
+    list_display = ["id", "django_user", "peeringdb_net_id", "asn", "net_name", "participant_id"]
+    search_fields = ["django_user__username", "net_name"]
+    list_filter = ["net_name"]
 
 
 @admin.register(ParticipantProfile)
